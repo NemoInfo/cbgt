@@ -1,0 +1,162 @@
+##################################################
+[STN.default]                                    #
+##################################################
+# Conductances
+g_l = 2.25  # nS/um^2 
+g_k = 45   # nS/um^2 
+g_na = 37.5 # nS/um^2 
+g_t = 0.5   # nS/um^2 
+g_ca = 0.5  # nS/um^2 
+g_ahp = 9  # nS/um^2 
+g_g_s = 2.5 # nS/um^2 
+
+# Reversal potentials
+v_l = -60     # mV 
+v_k = -80     # mV 
+v_na = 55     # mV 
+v_ca = 140    # mV 
+v_g_s = -100  # -85  # mV [mismatch]
+
+# Time constants
+tau_h_1 = 500  # ms 
+tau_n_1 = 100  # ms 
+tau_r_1 = 17.5 # ms
+tau_h_0 = 1    # ms 
+tau_n_0 = 1    # ms 
+tau_r_0 = 7.1  # 40  # ms [mismatch]
+
+phi_h = 0.75 
+phi_n = 0.75 
+phi_r = 0.5  # 0.2 # [mismatch]
+
+# Calcium parameters
+k_1 = 15      
+k_ca = 22.5   
+eps = 3.75e-5 # ms^-1 (== phi_h * 5e-5)
+
+# Threshold potentials
+tht_m = -30  # mV 
+tht_h = -39  # mV
+tht_n = -32  # mV
+tht_r = -67  # mV 
+tht_a = -63  # mV 
+tht_b = 0.25 # 0.4 [mismatch]
+tht_s = -39  # mV 
+
+# Tau threshold potentials
+tht_h_t = -57  # mV 
+tht_n_t = -80  # mV 
+tht_r_t = 68   # mV 
+
+# Synaptic threshold potentials
+tht_g_h = -39  # mV
+tht_g = 30     # mV 
+
+# Synaptic rate constants
+alpha = 5  # ms^-1 
+beta = 1   # ms^-1 
+
+# Sigmoid slopes
+sig_m = 15    
+sig_h = -3.1  
+sig_n = 8     
+sig_r = -2.0  
+sig_a = 7.8   
+sig_b = -0.07 # -0.1 [mismatch]
+sig_s = 8     
+
+# Tau sigmoid slopes
+sig_h_t = -3   
+sig_n_t = -26  
+sig_r_t = -2.2 
+
+# Synaptic sigmoid slopes
+sig_g_h = 8
+
+# b_inf constant parameter (pre-computed at runtime)
+b_const = nan
+
+##################################################
+[STN.alt_1]                                      #
+##################################################
+g_k = 0.9
+g_l = -0.1
+
+
+##################################################
+[GPe.default]                                    #
+##################################################
+# Conductances
+g_l = 0.1    # nS/um^2 
+g_k = 30.0   # nS/um^2 
+g_na = 120   # nS/um^2 
+g_t = 0.5    # nS/um^2 
+g_ca = 0.15  # nS/um^2 
+g_ahp = 30   # nS/um^2 
+g_s_g = 0.03 # nS/um^2
+g_g_g = 0.06 # nS/um^2
+
+# Reversal potentials
+v_l = -55     # mV 
+v_k = -80     # mV 
+v_na = 55     # mV 
+v_ca = 120    # mV 
+v_g_g = -100  # mV 
+v_s_g = 0     # mV 
+
+# Time constants
+tau_h_1 = 0.27 # ms 
+tau_n_1 = 0.27 # ms 
+tau_h_0 = 0.05 # ms 
+tau_n_0 = 0.05 # ms 
+tau_r = 30     # ms 
+
+phi_h = 0.05 
+phi_n = 0.05 
+phi_r = 1.0  
+
+# Calcium parameters
+k_1 = 30   
+k_ca = 20  
+eps = 1e-4 # ms^-1 
+
+# Threshold potentials
+tht_m = -37 # mV 
+tht_h = -58 # mV 
+tht_n = -50 # mV 
+tht_r = -70 # mV 
+tht_a = -57 # mV 
+tht_s = -35 # mV 
+
+# Tau threshold potentials
+tht_h_t = -40 # mV 
+tht_n_t = -40 # mV 
+
+# Synaptic threshold potentials
+tht_g_h = -57 # mV 
+tht_g = 20    # mV 
+
+# Synaptic rate constants
+alpha = 2  # ms^-1 
+beta = 0.08 # ms^-1 
+
+# Sigmoid slopes
+sig_m = 10  
+sig_h = -12 
+sig_n = 14  
+sig_r = -2  
+sig_a = 2
+sig_s = 2   
+
+# Tau sigmoid slopes
+sig_h_t = -12 
+sig_n_t = -12 
+
+# Synaptic sigmoid slope
+sig_g_h = 2 
+
+##################################################
+[GPe.alt_1]                                      #
+##################################################
+g_s_g = 0.016
+g_g_g = 0.2
