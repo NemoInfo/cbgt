@@ -1,4 +1,4 @@
-use ndarray::{array, Array2};
+use ndarray::{Array2};
 use numpy::{IntoPyArray, PyArray2, PyArrayMethods};
 use pyo3::{ffi::c_str, prelude::*, types::PyDict};
 
@@ -88,6 +88,8 @@ impl RubinTerman {
 
     stn.set_ics_from_config(&self.parameters_file, &self.parameters_settings);
     gpe.set_ics_from_config(&self.parameters_file, &self.parameters_settings);
+
+    println!("Running loop");
 
     for it in 0..n_timesteps - 1 {
       stn.euler_step(it, self.dt, &stn_parameters, &gpe.s.row(it));

@@ -88,6 +88,9 @@ impl GPePopulation {
     ]);
     for (k, v) in ic_table {
       if let Some(state) = state.get_mut(k.as_str()) {
+        if state.shape()[1] != v.as_array().expect("array").len() {
+          return;
+        }
         state.row_mut(0).assign(&Array1::<f64>::from(
           v.as_array()
             .expect("Initial condition entry should be array")
