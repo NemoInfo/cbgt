@@ -194,7 +194,10 @@ pub trait Parameters: DeserializeOwned {
     let mut merged = default_table.clone();
 
     if version == "default" {
-      return Value::Table(merged).try_into::<Self>().unwrap_or_else(|err| panic!("Failed to deserialize parameters: {err}")).update();
+      return Value::Table(merged)
+        .try_into::<Self>()
+        .unwrap_or_else(|err| panic!("Failed to deserialize parameters: {err}"))
+        .update();
     }
 
     type_table
@@ -205,6 +208,9 @@ pub trait Parameters: DeserializeOwned {
       .iter()
       .for_each(|(key, val)| _ = merged.insert(key.clone(), val.clone()));
 
-    Value::Table(merged).try_into::<Self>().unwrap_or_else(|err| panic!("Failed to deserialize parameters: {err}")).update()
+    Value::Table(merged)
+      .try_into::<Self>()
+      .unwrap_or_else(|err| panic!("Failed to deserialize parameters: {err}"))
+      .update()
   }
 }

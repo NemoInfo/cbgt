@@ -1,5 +1,5 @@
 use ndarray::{array, Array2};
-use numpy::IntoPyArray;
+use numpy::{IntoPyArray, PyArray2, PyArrayMethods};
 use pyo3::{ffi::c_str, prelude::*, types::PyDict};
 
 use std::{collections::HashMap, path::PathBuf};
@@ -10,139 +10,88 @@ use parameters::*;
 mod stn;
 use stn::STNPopulation;
 
+mod gpe;
+use gpe::GPePopulation;
+
 mod util;
 
 /// Rubin Terman model using Euler's method
 #[allow(unused)]
-#[pyclass(get_all)]
+#[pyclass]
 pub struct RubinTerman {
   /// Time between Euler steps (ms)
+  #[pyo3(get)]
   pub dt: f64,
   /// Simulation time (s)
+  #[pyo3(get)]
   pub total_t: f64,
   /// Parameter file path
   pub parameters_file: PathBuf,
   /// Parameter file path
   pub parameters_settings: String,
   /// Number of neurons in STN
+  #[pyo3(get)]
   pub num_stn: usize,
   /// Number of neurons in GPe
+  #[pyo3(get)]
   pub num_gpe: usize,
-  /// External STN current (Python function)
-  /// (time_ms: f64, neuron_idx: usize) -> f64
-  pub i_ext_stn_py: PyObject,
-  /// External GPe current (Python function)
-  /// (time_ms: f64, neuron_idx: usize) -> f64
-  pub i_ext_gpe_py: PyObject,
-  /// External GPe current (Python function)
-  /// (time_ms: f64, neuron_idx: usize) -> f64
-  pub i_app_gpe_py: PyObject,
+  /// External STN current
+  pub i_ext_stn: Array2<f64>,
+  /// External GPe current
+  pub i_ext_gpe: Array2<f64>,
+  /// Subcortical simulated GPe current
+  pub i_app_gpe: Array2<f64>,
+  /// GPe -> STN connectivity matrix
+  pub c_g_s: Array2<f64>,
+  /// GPe -> GPe connectivity matrix
+  pub c_g_g: Array2<f64>,
+  /// STN -> GPe connectivity matrix
+  pub c_s_g: Array2<f64>,
 }
 
-impl Default for RubinTerman {
-  fn default() -> Self {
+impl RubinTerman {
+  pub fn new(num_stn: usize, num_gpe: usize, dt: f64, total_t: f64) -> Self {
+    let num_timesteps: usize = (total_t * 1e3 / dt) as usize;
+
     RubinTerman {
-      dt: 0.01,
-      total_t: 2.0,
+      dt,
+      total_t,
+      num_stn,
+      num_gpe,
       parameters_file: "src/PARAMETERS.toml".into(),
       parameters_settings: "default".to_owned(),
-      num_stn: 10,
-      num_gpe: 10,
-      i_ext_stn_py: default_i_ext_py(),
-      i_ext_gpe_py: default_i_ext_py(),
-      i_app_gpe_py: default_i_ext_py(),
+      i_ext_stn: Array2::zeros((num_timesteps, num_stn)),
+      i_ext_gpe: Array2::zeros((num_timesteps, num_gpe)),
+      i_app_gpe: Array2::zeros((num_timesteps, num_gpe)),
+      c_g_s: Array2::zeros((num_gpe, num_stn)),
+      c_g_g: Array2::zeros((num_gpe, num_gpe)),
+      c_s_g: Array2::zeros((num_stn, num_gpe)),
     }
   }
 }
 
 impl RubinTerman {
-  pub fn _run(&self) -> HashMap<&str, HashMap<&str, Array2<f64>>> {
+  pub fn _run(&mut self) -> HashMap<&str, HashMap<&str, Array2<f64>>> {
     let n_timesteps: usize = (self.total_t * 1e3 / self.dt) as usize;
     let stn_parameters = STNParameters::from_config(&self.parameters_file, &self.parameters_settings);
-    let _gpe_parameters = GPeParameters::from_config(&self.parameters_file, &self.parameters_settings);
+    let gpe_parameters = GPeParameters::from_config(&self.parameters_file, &self.parameters_settings);
 
-    let i_ext_stn = self.vectorize_i_ext(&self.i_ext_stn_py);
-    let mut stn = STNPopulation::new(n_timesteps, self.num_stn, i_ext_stn);
+    let mut stn = STNPopulation::new(n_timesteps, self.num_stn, self.i_ext_stn.clone(), self.c_g_s.clone());
+    let mut gpe = GPePopulation::new(
+      n_timesteps,
+      self.num_stn,
+      self.i_ext_gpe.clone(),
+      self.i_app_gpe.clone(),
+      self.c_s_g.clone(),
+      self.c_g_g.clone(),
+    );
 
-    // Create GPe currents
-    let _i_ext_gpe = self.vectorize_i_ext(&self.i_ext_gpe_py);
-    let _i_app_gpe = self.vectorize_i_ext(&self.i_app_gpe_py);
-
-    stn.v.row_mut(0).assign(&array![
-      -59.62828421888404,
-      -61.0485669306943,
-      -59.9232859246653,
-      -58.70506521874258,
-      -59.81316532105502,
-      -60.41737514151719,
-      -60.57000688576042,
-      -60.77581472006873,
-      -59.72163362685856,
-      -59.20177081754847
-    ]);
-    stn.h.row_mut(0).assign(&array![
-      0.5063486245631907,
-      0.2933274739456392,
-      0.4828268896903307,
-      0.5957938758715363,
-      0.4801708406464686,
-      0.397555659151211,
-      0.3761635970127477,
-      0.3316364917935809,
-      0.4881964058107033,
-      0.5373898124788108
-    ]);
-    stn.n.row_mut(0).assign(&array![
-      0.0301468039831072,
-      0.04412485475791555,
-      0.02936940165051648,
-      0.03307223867110721,
-      0.02961425249063069,
-      0.02990618866753074,
-      0.03096707115136645,
-      0.03603641291454053,
-      0.02983123244237023,
-      0.03137696787429014
-    ]);
-    stn.r.row_mut(0).assign(&array![
-      0.0295473069771012,
-      0.07318677802595788,
-      0.03401991571903244,
-      0.01899268957583912,
-      0.0322092810112401,
-      0.04490215539151968,
-      0.0496024428039565,
-      0.05982606979469521,
-      0.03078507359379932,
-      0.02403333448524015
-    ]);
-    stn.ca.row_mut(0).assign(&array![
-      0.2994323366425385,
-      0.4076730264403847,
-      0.3271760563827424,
-      0.2456039126383157,
-      0.3090126869287847,
-      0.3533066857313201,
-      0.3668697913124569,
-      0.3777575381495549,
-      0.3008309498107221,
-      0.2631312497961643
-    ]);
-    stn.s.row_mut(0).assign(&array![
-      0.008821617722180833,
-      0.007400276913597601,
-      0.00850582621763913,
-      0.009886276645187469,
-      0.00862235586166425,
-      0.008001611992658621,
-      0.007851916739337694,
-      0.007654426383227644,
-      0.008720434017133022,
-      0.009298664650592724
-    ]);
+    stn.set_ics_from_config(&self.parameters_file, &self.parameters_settings);
+    gpe.set_ics_from_config(&self.parameters_file, &self.parameters_settings);
 
     for it in 0..n_timesteps - 1 {
-      stn.euler_step(it, self.dt, &stn_parameters);
+      stn.euler_step(it, self.dt, &stn_parameters, &gpe.s.row(it));
+      gpe.euler_step(it, self.dt, &gpe_parameters, &stn.s.row(it));
     }
 
     #[rustfmt::skip]
@@ -155,22 +104,51 @@ impl RubinTerman {
 				("i_t", stn.i_t), 
 				("i_ca", stn.i_ca), 
 				("i_ahp", stn.i_ahp), 
+				("i_g_s", stn.i_g_s), 
 				("i_ext", stn.i_ext), 
 				("s", stn.s), 
+			])),
+      ("gpe", HashMap::from([
+				("v", gpe.v), 
+				("i_l", gpe.i_l), 
+				("i_k", gpe.i_k), 
+				("i_na", gpe.i_na), 
+				("i_t", gpe.i_t), 
+				("i_ca", gpe.i_ca), 
+				("i_ahp", gpe.i_ahp), 
+				("i_ext", gpe.i_ext), 
+				("i_app", gpe.i_app), 
+				("i_s_g", gpe.i_s_g), 
+				("i_g_g", gpe.i_g_g), 
+				("s", gpe.s), 
 			])),
     ]);
 
     combined
   }
 
-  pub fn vectorize_i_ext(&self, i_ext_py: &PyObject) -> Array2<f64> {
+  pub fn vectorize_i_ext<F>(i_ext: F, dt: f64, total_t: f64, num_neurons: usize) -> Array2<f64>
+  where
+    F: Fn(f64, usize) -> f64,
+  {
+    let num_timesteps: usize = (total_t * 1e3 / dt) as usize;
+    let mut a = Array2::<f64>::zeros((num_timesteps, num_neurons));
+    for n in 0..num_neurons {
+      for it in 0..num_timesteps {
+        a[[it, n]] = i_ext(it as f64 * dt, n);
+      }
+    }
+    a
+  }
+
+  pub fn vectorize_i_ext_py(i_ext_py: &PyObject, dt: f64, total_t: f64, num_neurons: usize) -> Array2<f64> {
+    let num_timesteps: usize = (total_t * 1e3 / dt) as usize;
     pyo3::prepare_freethreaded_python();
     Python::with_gil(|py| {
-      let n_timesteps: usize = (self.total_t * 1e3 / self.dt) as usize;
-      let mut a = Array2::<f64>::zeros((n_timesteps, self.num_stn));
-      for n in 0..self.num_gpe {
-        for it in 0..n_timesteps {
-          a[[it, n]] = i_ext_py.call1(py, (it as f64 * self.dt, n)).unwrap().extract(py).unwrap();
+      let mut a = Array2::<f64>::zeros((num_timesteps, num_neurons));
+      for n in 0..num_neurons {
+        for it in 0..num_timesteps {
+          a[[it, n]] = i_ext_py.call1(py, (it as f64 * dt, n)).unwrap().extract(py).unwrap();
         }
       }
       a
@@ -183,13 +161,20 @@ fn default_i_ext_py() -> PyObject {
   Python::with_gil(|py| py.eval(c_str!("lambda t, n: 0.0"), None, None).unwrap().into())
 }
 
+fn pyarray_to_ndarray<T: numpy::Element>(arr: Py<PyArray2<T>>) -> Array2<T> {
+  pyo3::prepare_freethreaded_python();
+  Python::with_gil(|py| arr.bind(py).to_owned_array())
+}
+
 #[pymethods]
 impl RubinTerman {
   #[new]
   #[pyo3(signature = (dt = 0.01, total_t = 2.0, parameters_file = PathBuf::from("src/PARAMETERS.toml"),  
       parameters_settings="default".to_owned(), num_stn=10, num_gpe=10, 
-      i_ext_stn=default_i_ext_py(), i_ext_gpe=default_i_ext_py(), i_app_gpe=default_i_ext_py()))]
-  fn new(
+      i_ext_stn=default_i_ext_py(), i_ext_gpe=default_i_ext_py(), i_app_gpe=default_i_ext_py(),
+      c_g_s=None, c_s_g=None, c_g_g=None)
+    )]
+  fn new_py(
     dt: f64,
     total_t: f64,
     parameters_file: PathBuf,
@@ -199,6 +184,9 @@ impl RubinTerman {
     i_ext_stn: PyObject,
     i_ext_gpe: PyObject,
     i_app_gpe: PyObject,
+    c_g_s: Option<Py<PyArray2<f64>>>,
+    c_s_g: Option<Py<PyArray2<f64>>>,
+    c_g_g: Option<Py<PyArray2<f64>>>,
   ) -> Self {
     Self {
       dt,
@@ -207,13 +195,25 @@ impl RubinTerman {
       parameters_settings,
       num_stn,
       num_gpe,
-      i_ext_stn_py: i_ext_stn,
-      i_ext_gpe_py: i_ext_gpe,
-      i_app_gpe_py: i_app_gpe,
+      i_ext_stn: Self::vectorize_i_ext_py(&i_ext_stn, dt, total_t, num_stn),
+      i_ext_gpe: Self::vectorize_i_ext_py(&i_ext_gpe, dt, total_t, num_gpe),
+      i_app_gpe: Self::vectorize_i_ext_py(&i_app_gpe, dt, total_t, num_gpe),
+      c_g_s: match c_g_s {
+        None => Array2::zeros((num_gpe, num_stn)),
+        Some(arr) => pyarray_to_ndarray(arr),
+      },
+      c_s_g: match c_s_g {
+        None => Array2::zeros((num_gpe, num_stn)),
+        Some(arr) => pyarray_to_ndarray(arr),
+      },
+      c_g_g: match c_g_g {
+        None => Array2::zeros((num_gpe, num_stn)),
+        Some(arr) => pyarray_to_ndarray(arr),
+      },
     }
   }
 
-  fn run(&self, py: Python) -> Py<PyDict> {
+  fn run(&mut self, py: Python) -> Py<PyDict> {
     let res = self._run();
     println!("Simulation completed!");
     to_python_dict(py, res)
@@ -249,30 +249,46 @@ mod rubin_terman {
   use pyo3::Python;
 
   #[test]
-  fn test_vectorize_i_ext() {
+  fn test_vectorize_i_ext_py() {
     pyo3::prepare_freethreaded_python();
-    let rt = RubinTerman {
-      dt: 0.01,
-      total_t: 1.,
-      i_ext_stn_py: Python::with_gil(|py| {
-        py.eval(c_str!("lambda t, n: 6.9 if t < 500 else 9.6"), None, None).unwrap().into()
-      }),
-      ..Default::default()
-    };
-    let a = rt.vectorize_i_ext(&rt.i_ext_stn_py);
+    let dt = 0.01;
+    let total_t = 1.;
+    let num_neurons = 5;
+    let a = RubinTerman::vectorize_i_ext_py(
+      &Python::with_gil(|py| py.eval(c_str!("lambda t, n: 6.9 if t < 500 else 9.6"), None, None).unwrap().into()),
+      dt,
+      total_t,
+      num_neurons,
+    );
     assert_eq!(a[[0, 0]], 6.9);
     assert_eq!(a[[a.shape()[0] - 1, 0]], 9.6);
 
-    let rt = RubinTerman {
-      dt: 0.1,
-      total_t: 1.,
-      i_ext_stn_py: Python::with_gil(|py| {
-        py.eval(c_str!("lambda t, n: 6.9 if t < 500 else 9.6"), None, None).unwrap().into()
-      }),
-      ..Default::default()
-    };
-    let a = rt.vectorize_i_ext(&rt.i_ext_stn_py);
+    let a = RubinTerman::vectorize_i_ext_py(
+      &Python::with_gil(|py| py.eval(c_str!("lambda t, n: 6.9 if t < 500 else 9.6"), None, None).unwrap().into()),
+      0.1,
+      total_t,
+      num_neurons,
+    );
     assert_eq!(a[[0, 0]], 6.9);
     assert_eq!(a[[a.shape()[0] - 1, 0]], 9.6);
+  }
+
+  #[test]
+  fn test_vectorize_i_ext_rust() {
+    let a = RubinTerman::vectorize_i_ext(|t, _| if t < 500. { 6.9 } else { 9.6 }, 0.01, 1., 5);
+    assert_eq!(a[[0, 0]], 6.9);
+    assert_eq!(a[[a.shape()[0] - 1, 0]], 9.6);
+    let a = RubinTerman::vectorize_i_ext(|t, _| if t < 500. { 6.9 } else { 9.6 }, 0.1, 1., 5);
+    assert_eq!(a[[0, 0]], 6.9);
+    assert_eq!(a[[a.shape()[0] - 1, 0]], 9.6);
+  }
+
+  #[test]
+  fn test_load_ics() {
+    let rt = RubinTerman { parameters_settings: "test".to_string(), ..RubinTerman::new(10, 10, 0.01, 2.) };
+    let mut stn = STNPopulation::new(10, rt.num_stn, rt.i_ext_stn.clone(), rt.c_g_s.clone());
+    stn.set_ics_from_config(&rt.parameters_file, &rt.parameters_settings);
+    assert_eq!(stn.h[[0, 0]], -69.);
+    assert_eq!(stn.v[[0, 9]], -59.20177081754847);
   }
 }

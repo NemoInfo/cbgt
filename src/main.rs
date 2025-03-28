@@ -4,13 +4,8 @@ use cbgt::RubinTerman;
 // use pyo3::Python;
 
 fn main() {
-  let _ = RubinTerman {
-    dt: 0.01,
-    total_t: 2.,
-    ..Default::default()
-  }
-  ._run();
-  println!("Simulation completed!");
+  let _ = RubinTerman::new(10, 10, 0.01, 2.)._run();
+  println!("Simulation completed!",);
 
   // @TODO: Fix serialization find something nice to serialize a HashMap<HashMap<Array>> to
   //        maybe ?pickle?
