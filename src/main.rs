@@ -12,7 +12,8 @@ fn main() {
   ._run();
   println!("Simulation completed!");
 
-  // [[FIX SERIALISATION]]
+  // @TODO: Fix serialization find something nice to serialize a HashMap<HashMap<Array>> to
+  //        maybe ?pickle?
   // let file_name = "test.npy";
   // write_npy(&file_name, &res).expect(&format!("Failed to write results to {file_name}"));
   // println!("Wrote results to {file_name}!");

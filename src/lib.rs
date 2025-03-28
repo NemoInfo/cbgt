@@ -155,6 +155,7 @@ impl RubinTerman {
 				("i_t", stn.i_t), 
 				("i_ca", stn.i_ca), 
 				("i_ahp", stn.i_ahp), 
+				("i_ext", stn.i_ext), 
 				("s", stn.s), 
 			])),
     ]);
