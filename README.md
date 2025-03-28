@@ -24,7 +24,7 @@ maturin develop --release
 ```python3
 rt = cbgt.RubinTerman(dt=0.01, total_t=2)
 data = rt.run()
-print(print(data["stn"]["v"]).shape)
+print((data["stn"]["v"]).shape)
 ```
 Experiment graphs will be kept in [the Jupyter Notebook](/experiment.ipynb). You can refer to it for more exampels.
 
