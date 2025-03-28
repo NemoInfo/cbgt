@@ -1,8 +1,8 @@
-use ndarray::{array, s, Array, ArrayView, Dim, Dimension};
-use numpy::{IntoPyArray, PyArray3};
-use pyo3::prelude::*;
+use ndarray::{array, s, Array, Array2, ArrayView, Dimension};
+use numpy::{IntoPyArray, };
+use pyo3::{ffi::c_str, prelude::*, types::PyDict};
 
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
 mod parameters;
 use parameters::*;
@@ -23,6 +23,15 @@ pub struct RubinTerman {
   pub num_stn: usize,
   /// Number of neurons in GPe
   pub num_gpe: usize,
+  /// External STN current (Python function)
+  /// (time_ms: f64, neuron_idx: usize) -> f64
+  pub i_ext_stn_py: PyObject,
+  /// External GPe current (Python function)
+  /// (time_ms: f64, neuron_idx: usize) -> f64
+  pub i_ext_gpe_py: PyObject,
+  /// External GPe current (Python function)
+  /// (time_ms: f64, neuron_idx: usize) -> f64
+  pub i_app_gpe_py: PyObject,
 }
 
 impl Default for RubinTerman {
@@ -34,12 +43,15 @@ impl Default for RubinTerman {
       parameters_settings: "default".to_owned(),
       num_stn: 10,
       num_gpe: 10,
+      i_ext_stn_py: default_i_ext_py(),
+      i_ext_gpe_py: default_i_ext_py(),
+      i_app_gpe_py: default_i_ext_py(),
     }
   }
 }
 
 impl RubinTerman {
-  pub fn _run(&self) -> Array<f64, Dim<[usize; 3]>> {
+  pub fn _run(&self) -> HashMap<&str, HashMap<&str, Array2<f64>>> {
     let n_timesteps: usize = (self.total_t * 1e3 / self.dt) as usize;
     let stn = STNParameters::from_config(&self.parameters_file, &self.parameters_settings);
     let _gpe = GPeParameters::from_config(&self.parameters_file, &self.parameters_settings);
@@ -58,6 +70,11 @@ impl RubinTerman {
     let mut i_t_stn = Array::<f64, _>::zeros((n_timesteps, self.num_stn));
     let mut i_ca_stn = Array::<f64, _>::zeros((n_timesteps, self.num_stn));
     let mut i_ahp_stn = Array::<f64, _>::zeros((n_timesteps, self.num_stn));
+    let i_ext_stn = self.vectorize_i_ext(&self.i_ext_stn_py);
+
+    // Create GPe currents
+    let _i_ext_gpe = self.vectorize_i_ext(&self.i_ext_gpe_py);
+    let _i_app_gpe = self.vectorize_i_ext(&self.i_app_gpe_py);
 
     v_stn.slice_mut(s![0, ..]).assign(&array![
       -59.62828421888404,
@@ -162,7 +179,15 @@ impl RubinTerman {
 
       // Update state
       v1.assign(
-        &(v + self.dt * (-&i_l_stn_mut - &i_k_stn_mut - &i_na_stn_mut - &i_t_stn_mut - &i_ca_stn_mut - &i_ahp_stn_mut)), // - i_ext_stn
+        &(v
+          + self.dt
+            * (-&i_l_stn_mut
+              - &i_k_stn_mut
+              - &i_na_stn_mut
+              - &i_t_stn_mut
+              - &i_ca_stn_mut
+              - &i_ahp_stn_mut
+              - &i_ext_stn.row(it))),
       );
       n1.assign(&(n + self.dt * stn.phi_n * (n_inf - n) / tau_n));
       h1.assign(&(h + self.dt * stn.phi_h * (h_inf - h) / tau_h));
@@ -179,14 +204,48 @@ impl RubinTerman {
     combined.slice_mut(s![5, .., ..]).assign(&i_ca_stn);
     combined.slice_mut(s![6, .., ..]).assign(&i_ahp_stn);
 
+    #[rustfmt::skip]
+    let combined = HashMap::<&str, HashMap<&str, Array2<f64>>>::from([
+      ("stn", HashMap::from([
+				("v", v_stn), 
+				("i_l", i_l_stn), 
+				("i_k", i_k_stn), 
+				("i_na", i_na_stn), 
+				("i_t", i_t_stn), 
+				("i_ca", i_ca_stn), 
+				("i_ahp", i_ahp_stn), 
+			])),
+    ]);
+
     combined
   }
+
+  pub fn vectorize_i_ext(&self, i_ext_py: &PyObject) -> Array2<f64> {
+    pyo3::prepare_freethreaded_python();
+    Python::with_gil(|py| {
+      let n_timesteps: usize = (self.total_t * 1e3 / self.dt) as usize;
+      let mut a = Array2::<f64>::zeros((n_timesteps, self.num_stn));
+      for n in 0..self.num_gpe {
+        for it in 0..n_timesteps {
+          a[[it, n]] = i_ext_py.call1(py, (it as f64 * self.dt, n)).unwrap().extract(py).unwrap();
+        }
+      }
+      a
+    })
+  }
+}
+
+fn default_i_ext_py() -> PyObject {
+  pyo3::prepare_freethreaded_python();
+  Python::with_gil(|py| py.eval(c_str!("lambda t, n: 0.0"), None, None).unwrap().into())
 }
 
 #[pymethods]
 impl RubinTerman {
   #[new]
-  #[pyo3(signature = (dt = 0.01, total_t = 2.0, parameters_file = PathBuf::from("src/PARAMETERS.toml"), parameters_settings="default".to_owned(), num_stn=10, num_gpe=10))]
+  #[pyo3(signature = (dt = 0.01, total_t = 2.0, parameters_file = PathBuf::from("src/PARAMETERS.toml"),  
+      parameters_settings="default".to_owned(), num_stn=10, num_gpe=10, 
+      i_ext_stn=default_i_ext_py(), i_ext_gpe=default_i_ext_py(), i_app_gpe=default_i_ext_py()))]
   fn new(
     dt: f64,
     total_t: f64,
@@ -194,6 +253,9 @@ impl RubinTerman {
     parameters_settings: String,
     num_stn: usize,
     num_gpe: usize,
+    i_ext_stn: PyObject,
+    i_ext_gpe: PyObject,
+    i_app_gpe: PyObject,
   ) -> Self {
     Self {
       dt,
@@ -202,14 +264,33 @@ impl RubinTerman {
       parameters_settings,
       num_stn,
       num_gpe,
+      i_ext_stn_py: i_ext_stn,
+      i_ext_gpe_py: i_ext_gpe,
+      i_app_gpe_py: i_app_gpe,
     }
   }
 
-  fn run(&self, py: Python) -> Py<PyArray3<f64>> {
-    let res: Array<f64, Dim<[usize; 3]>> = self._run();
+  fn run(&self, py: Python) -> Py<PyDict> {
+    let res = self._run();
     println!("Simulation completed!");
-    res.into_pyarray(py).into()
+    to_python_dict(py, res)
   }
+}
+
+fn to_python_dict<'py>(py: Python, rust_map: HashMap<&str, HashMap<&str, Array2<f64>>>) -> Py<PyDict> {
+  let py_dict = PyDict::new(py);
+
+  for (key1, sub_map) in rust_map {
+    let sub_dict = PyDict::new(py);
+
+    for (key2, array) in sub_map {
+      sub_dict.set_item(key2, array.into_pyarray(py)).unwrap();
+    }
+
+    py_dict.set_item(key1, sub_dict).unwrap();
+  }
+
+  py_dict.into()
 }
 
 #[pymodule]
@@ -224,4 +305,39 @@ fn x_inf<D: Dimension>(v: &ArrayView<f64, D>, tht_x: f64, sig_x: f64) -> Array<f
 
 fn tau_x<D: Dimension>(v: &ArrayView<f64, D>, tau_x_0: f64, tau_x_1: f64, tht_x_t: f64, sig_x_t: f64) -> Array<f64, D> {
   tau_x_0 + tau_x_1 / (1. + ((tht_x_t - v) / sig_x_t).exp())
+}
+
+#[cfg(test)]
+mod rubin_terman {
+  use super::*;
+  use pyo3::ffi::c_str;
+  use pyo3::Python;
+
+  #[test]
+  fn test_vectorize_i_ext() {
+    pyo3::prepare_freethreaded_python();
+    let rt = RubinTerman {
+      dt: 0.01,
+      total_t: 1.,
+      i_ext_stn_py: Python::with_gil(|py| {
+        py.eval(c_str!("lambda t, n: 6.9 if t < 500 else 9.6"), None, None).unwrap().into()
+      }),
+      ..Default::default()
+    };
+    let a = rt.vectorize_i_ext(&rt.i_ext_stn_py);
+    assert_eq!(a[[0, 0]], 6.9);
+    assert_eq!(a[[a.shape()[0] - 1, 0]], 9.6);
+
+    let rt = RubinTerman {
+      dt: 0.1,
+      total_t: 1.,
+      i_ext_stn_py: Python::with_gil(|py| {
+        py.eval(c_str!("lambda t, n: 6.9 if t < 500 else 9.6"), None, None).unwrap().into()
+      }),
+      ..Default::default()
+    };
+    let a = rt.vectorize_i_ext(&rt.i_ext_stn_py);
+    assert_eq!(a[[0, 0]], 6.9);
+    assert_eq!(a[[a.shape()[0] - 1, 0]], 9.6);
+  }
 }
