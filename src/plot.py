@@ -17,7 +17,7 @@ def plot_time_activity(xs, labels, dt, title=None, vmin=None, vmax=0, cmap="gray
     ax.set_yticklabels([1, x.shape[1]])
     ax.set_ylabel(f"{label} #", rotation=0, fontsize=14, labelpad=15)
 
-  axs[-1].set_xticks(np.arange(0, xs[-1].shape[0] + 1, 250 / dt))
+  axs[-1].set_xticks([0, xs[-1].shape[0]])
   axs[-1].xaxis.set_major_formatter(lambda x, _: f"{x*dt:.0f}")
 
   axs[-1].set_xlabel("Time (ms)", fontsize=14)
