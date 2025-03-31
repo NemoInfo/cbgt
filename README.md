@@ -14,8 +14,9 @@ I use [Nix Flakes](https://nixos.wiki/wiki/Flakes) for dependencies. (this will 
 ```sh
 nix develop .
 ```
+If you don't want to use Nix Flakes, check the required pakages in [flake.nix](/flake.nix), and install them manually.
 
-### To build the python bindings
+Then, to build the python bindings
 ```sh
 maturin develop --release
 ```
