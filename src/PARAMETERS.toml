@@ -15,7 +15,7 @@ v_l = -60     # mV
 v_k = -80     # mV 
 v_na = 55     # mV 
 v_ca = 140    # mV 
-v_g_s = -100  # -85  # mV [mismatch]
+v_g_s = -100  # -85  # mV
 
 # Time constants
 tau_h_1 = 500  # ms 
