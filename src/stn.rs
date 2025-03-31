@@ -93,7 +93,11 @@ impl STNPopulation {
           v.as_array()
             .expect("Initial condition entry should be array")
             .iter()
-            .map(|x| x.as_float().unwrap())
+            .map(|x| {
+              x.as_float()
+                .or(x.as_integer().and_then(|x| Some(x as f64)))
+                .expect(&format!("Expected integer or floating point, got {x:?}"))
+            })
             .collect::<Vec<f64>>(),
         ));
       } else {
