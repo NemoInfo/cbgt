@@ -1,8 +1,8 @@
-use ndarray::Array2;
+use ndarray::{Array1, Array2};
 use numpy::{IntoPyArray, PyArray2, PyArrayMethods};
 use pyo3::{ffi::c_str, prelude::*, types::PyDict};
 
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf, sync::mpsc::sync_channel, thread};
 
 mod parameters;
 use parameters::*;
@@ -86,13 +86,36 @@ impl RubinTerman {
       self.c_g_g.clone(),
     );
 
+    let (tx_stn, rx_stn) = sync_channel::<Array1<f64>>(0);
+    let (tx_gpe, rx_gpe) = sync_channel::<Array1<f64>>(0);
+
+    let dt = self.dt;
+
     stn.set_ics_from_config(&self.parameters_file, &self.parameters_settings);
     gpe.set_ics_from_config(&self.parameters_file, &self.parameters_settings);
 
-    for it in 0..n_timesteps - 1 {
-      stn.euler_step(it, self.dt, &stn_parameters, &gpe.s.row(it));
-      gpe.euler_step(it, self.dt, &gpe_parameters, &stn.s.row(it));
-    }
+    let stn_thread = thread::spawn(move || {
+      for it in 0..n_timesteps - 1 {
+        tx_stn.send(stn.s.row(it).to_owned()).expect("Failed to send STN row");
+        let gpe_row = rx_gpe.recv().expect("Failed to recieve GPe synapses");
+
+        stn.euler_step(it, dt, &stn_parameters, &gpe_row.view());
+      }
+      stn
+    });
+
+    let gpe_thread = thread::spawn(move || {
+      for it in 0..n_timesteps - 1 {
+        let stn_row = rx_stn.recv().expect("Failed to recieve STN synapses");
+        tx_gpe.send(gpe.s.row(it).to_owned()).expect("Failed to send GPe synapses");
+
+        gpe.euler_step(it, dt, &gpe_parameters, &stn_row.view());
+      }
+      gpe
+    });
+
+    let stn = stn_thread.join().expect("STN thread panicked!");
+    let gpe = gpe_thread.join().expect("GPe thread panicked!");
 
     #[rustfmt::skip]
     let combined = HashMap::<&str, HashMap<&str, Array2<f64>>>::from([

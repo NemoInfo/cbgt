@@ -158,10 +158,7 @@ impl Parameters for STNParameters {
   const TYPE: &'static str = "STN";
 
   fn update(self) -> Self {
-    Self {
-      b_const: 1. / (1. + f64::exp(-self.tht_b / self.sig_b)),
-      ..self
-    }
+    Self { b_const: 1. / (1. + f64::exp(-self.tht_b / self.sig_b)), ..self }
   }
 }
 impl Parameters for GPeParameters {
