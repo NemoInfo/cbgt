@@ -2,7 +2,7 @@ use ndarray::Array2;
 use numpy::{IntoPyArray, PyArray2, PyArrayMethods};
 use pyo3::{ffi::c_str, prelude::*, types::PyDict};
 
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf, time};
 
 mod parameters;
 use parameters::*;
@@ -89,10 +89,12 @@ impl RubinTerman {
     stn.set_ics_from_config(&self.parameters_file, &self.parameters_settings);
     gpe.set_ics_from_config(&self.parameters_file, &self.parameters_settings);
 
+    let start = time::Instant::now();
     for it in 0..n_timesteps - 1 {
       stn.euler_step(it, self.dt, &stn_parameters, &gpe.s.row(it));
       gpe.euler_step(it, self.dt, &gpe_parameters, &stn.s.row(it));
     }
+    println!("MIN thread finnished in: {}", start.elapsed().as_secs_f32());
 
     #[rustfmt::skip]
     let combined = HashMap::<&str, HashMap<&str, Array2<f64>>>::from([
