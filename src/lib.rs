@@ -1,8 +1,9 @@
-use ndarray::{ Array2};
+use ndarray::Array2;
 use numpy::{IntoPyArray, PyArray2, PyArrayMethods};
 use pyo3::{ffi::c_str, prelude::*, types::PyDict};
 
-use std::{collections::HashMap, path::PathBuf, thread, time::Instant};
+use std::sync::Arc;
+use std::{collections::HashMap, path::PathBuf, thread};
 
 mod parameters;
 use parameters::*;
@@ -14,6 +15,7 @@ mod gpe;
 use gpe::GPePopulation;
 
 mod util;
+use util::{SpinBarrier, UnsafePtr};
 
 /// Rubin Terman model using Euler's method
 #[allow(unused)]
@@ -70,29 +72,6 @@ impl RubinTerman {
   }
 }
 
-use std::marker::PhantomData;
-use std::ptr::NonNull;
-
-/// A raw pointer wrapper that is unsafely marked as `Send`.
-struct UnsafePtr<T> {
-  ptr: NonNull<T>,
-  // This marker tells Rust not to assume ownership or drop behavior.
-  _phantom: PhantomData<T>,
-}
-
-unsafe impl<T> Send for UnsafePtr<T> {} // You're taking responsibility!
-
-impl<T> UnsafePtr<T> {
-  fn new(ptr: *const T) -> Self {
-    // Safety: caller must guarantee `ptr` is non-null and valid.
-    Self { ptr: NonNull::new(ptr as *mut T).expect("Pointer must not be null"), _phantom: PhantomData }
-  }
-
-  unsafe fn as_view<'a>(&self, len: usize) -> ndarray::ArrayView1<'a, T> {
-    ndarray::ArrayView1::from_shape_ptr(len, self.ptr.as_ptr())
-  }
-}
-
 impl RubinTerman {
   pub fn _run(&mut self) -> HashMap<&str, HashMap<&str, Array2<f64>>> {
     let n_timesteps: usize = (self.total_t * 1e3 / self.dt) as usize;
@@ -112,42 +91,35 @@ impl RubinTerman {
     stn.set_ics_from_config(&self.parameters_file, &self.parameters_settings);
     gpe.set_ics_from_config(&self.parameters_file, &self.parameters_settings);
 
-    let (tx_gpe, rx_gpe) = crossbeam::channel::bounded::<UnsafePtr<f64>>(1);
-    let (tx_stn, rx_stn) = crossbeam::channel::bounded::<UnsafePtr<f64>>(1);
+    let spin_barrier = Arc::new(SpinBarrier::new(2));
 
     let num_gpe = self.num_gpe;
     let num_stn = self.num_gpe;
     let dt = self.dt;
 
-    let start = Instant::now();
+    let gpe_s = unsafe { UnsafePtr::new(gpe.s.as_ptr()).as_view((n_timesteps, num_gpe)) };
+    let stn_s = unsafe { UnsafePtr::new(stn.s.as_ptr()).as_view((n_timesteps, num_stn)) };
+
+    let barrier = spin_barrier.clone();
     let stn_thread = thread::spawn(move || {
-      let start = Instant::now();
-      tx_stn.send(UnsafePtr::new(stn.s.row(0).as_ptr())).expect("Failed to send STN row");
       for it in 0..n_timesteps - 1 {
-        let gpe_row = unsafe { rx_gpe.recv().expect("Failed to recieve GPe synapses").as_view(num_gpe) };
-        stn.euler_step(it, dt, &stn_parameters, &gpe_row);
-        tx_stn.send(UnsafePtr::new(stn.s.row(it).as_ptr())).unwrap();
+        barrier.wait();
+        stn.euler_step(it, dt, &stn_parameters, &gpe_s.row(it));
       }
-      println!("STN thread finnished in: {}", start.elapsed().as_secs_f32());
       stn
     });
 
+    let barrier = spin_barrier;
     let gpe_thread = thread::spawn(move || {
-      let start = Instant::now();
-      tx_gpe.send(UnsafePtr::new(gpe.s.row(0).as_ptr())).expect("Failed to send GPe synapses");
       for it in 0..n_timesteps - 1 {
-        let stn_row = unsafe { rx_stn.recv().expect("Failed to recieve STN synapses").as_view(num_stn) };
-        gpe.euler_step(it, dt, &gpe_parameters, &stn_row);
-        tx_gpe.send(UnsafePtr::new(gpe.s.row(it).as_ptr())).expect("Failed to send GPe row");
+        barrier.wait();
+        gpe.euler_step(it, dt, &gpe_parameters, &stn_s.row(it));
       }
-      println!("GPe thread finnished in: {}", start.elapsed().as_secs_f32());
       gpe
     });
 
     let stn = stn_thread.join().expect("STN thread panicked!");
     let gpe = gpe_thread.join().expect("GPe thread panicked!");
-
-    println!("MIN thread finnished in: {}", start.elapsed().as_secs_f32());
 
     #[rustfmt::skip]
     let combined = HashMap::<&str, HashMap<&str, Array2<f64>>>::from([
