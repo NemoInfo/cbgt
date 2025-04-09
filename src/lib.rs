@@ -1,4 +1,4 @@
-use ndarray::{Array1, Array2};
+use ndarray::{ Array2};
 use numpy::{IntoPyArray, PyArray2, PyArrayMethods};
 use pyo3::{ffi::c_str, prelude::*, types::PyDict};
 
@@ -111,20 +111,18 @@ impl RubinTerman {
 
     stn.set_ics_from_config(&self.parameters_file, &self.parameters_settings);
     gpe.set_ics_from_config(&self.parameters_file, &self.parameters_settings);
-    let dt = self.dt;
 
     let (tx_gpe, rx_gpe) = crossbeam::channel::bounded::<UnsafePtr<f64>>(1);
     let (tx_stn, rx_stn) = crossbeam::channel::bounded::<UnsafePtr<f64>>(1);
 
-    let dummy_stn = Array1::<f64>::zeros(self.num_stn);
-    let dummy_gpe = Array1::<f64>::zeros(self.num_gpe);
     let num_gpe = self.num_gpe;
     let num_stn = self.num_gpe;
+    let dt = self.dt;
 
     let start = Instant::now();
     let stn_thread = thread::spawn(move || {
       let start = Instant::now();
-      tx_stn.send(UnsafePtr::new(dummy_stn.as_ptr())).expect("Failed to send STN row");
+      tx_stn.send(UnsafePtr::new(stn.s.row(0).as_ptr())).expect("Failed to send STN row");
       for it in 0..n_timesteps - 1 {
         let gpe_row = unsafe { rx_gpe.recv().expect("Failed to recieve GPe synapses").as_view(num_gpe) };
         stn.euler_step(it, dt, &stn_parameters, &gpe_row);
@@ -136,7 +134,7 @@ impl RubinTerman {
 
     let gpe_thread = thread::spawn(move || {
       let start = Instant::now();
-      tx_gpe.send(UnsafePtr::new(dummy_gpe.as_ptr())).expect("Failed to send GPe synapses");
+      tx_gpe.send(UnsafePtr::new(gpe.s.row(0).as_ptr())).expect("Failed to send GPe synapses");
       for it in 0..n_timesteps - 1 {
         let stn_row = unsafe { rx_stn.recv().expect("Failed to recieve STN synapses").as_view(num_stn) };
         gpe.euler_step(it, dt, &gpe_parameters, &stn_row);
