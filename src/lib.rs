@@ -1,4 +1,4 @@
-use ndarray::Array2;
+use ndarray::{Array2, ArrayView2};
 use numpy::{IntoPyArray, PyArray2, PyArrayMethods};
 use pyo3::{ffi::c_str, prelude::*, types::PyDict};
 
@@ -15,7 +15,7 @@ mod gpe;
 use gpe::GPePopulation;
 
 mod util;
-use util::{SpinBarrier, UnsafePtr};
+use util::SpinBarrier;
 
 /// Rubin Terman model using Euler's method
 #[allow(unused)]
@@ -74,13 +74,13 @@ impl RubinTerman {
 
 impl RubinTerman {
   pub fn _run(&mut self) -> HashMap<&str, HashMap<&str, Array2<f64>>> {
-    let n_timesteps: usize = (self.total_t * 1e3 / self.dt) as usize;
+    let num_timesteps: usize = (self.total_t * 1e3 / self.dt) as usize;
     let stn_parameters = STNParameters::from_config(&self.parameters_file, &self.parameters_settings);
     let gpe_parameters = GPeParameters::from_config(&self.parameters_file, &self.parameters_settings);
 
-    let mut stn = STNPopulation::new(n_timesteps, self.num_stn, self.i_ext_stn.clone(), self.c_g_s.clone());
+    let mut stn = STNPopulation::new(num_timesteps, self.num_stn, self.i_ext_stn.clone(), self.c_g_s.clone());
     let mut gpe = GPePopulation::new(
-      n_timesteps,
+      num_timesteps,
       self.num_stn,
       self.i_ext_gpe.clone(),
       self.i_app_gpe.clone(),
@@ -93,16 +93,16 @@ impl RubinTerman {
 
     let spin_barrier = Arc::new(SpinBarrier::new(2));
 
-    let num_gpe = self.num_gpe;
-    let num_stn = self.num_gpe;
     let dt = self.dt;
-
-    let gpe_s = unsafe { UnsafePtr::new(gpe.s.as_ptr()).as_view((n_timesteps, num_gpe)) };
-    let stn_s = unsafe { UnsafePtr::new(stn.s.as_ptr()).as_view((n_timesteps, num_stn)) };
+    // Hacky way to keep a view of the synapse in the other thread.
+    // This is okay as long as nuclei state integration is time-synchronised between threads.
+    // Since euler_step only modifies _.s.row(it + 1) we can safely read _.s.row(it) at the same time
+    let gpe_s = unsafe { ArrayView2::from_shape_ptr(gpe.s.raw_dim(), gpe.s.as_ptr()) };
+    let stn_s = unsafe { ArrayView2::from_shape_ptr(stn.s.raw_dim(), stn.s.as_ptr()) };
 
     let barrier = spin_barrier.clone();
     let stn_thread = thread::spawn(move || {
-      for it in 0..n_timesteps - 1 {
+      for it in 0..num_timesteps - 1 {
         barrier.wait();
         stn.euler_step(it, dt, &stn_parameters, &gpe_s.row(it));
       }
@@ -111,7 +111,7 @@ impl RubinTerman {
 
     let barrier = spin_barrier;
     let gpe_thread = thread::spawn(move || {
-      for it in 0..n_timesteps - 1 {
+      for it in 0..num_timesteps - 1 {
         barrier.wait();
         gpe.euler_step(it, dt, &gpe_parameters, &stn_s.row(it));
       }
