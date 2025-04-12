@@ -4,8 +4,9 @@ use cbgt::RubinTerman;
 // use pyo3::Python;
 
 fn main() {
-  let _ = RubinTerman::new(10, 10, 0.01, 10.)._run();
+  env_logger::init();
 
+  let _ = RubinTerman::new(10, 10, 0.02, 2., true, None, None)._run();
   println!("Simulation completed!",);
 
   // @TODO: Fix serialization find something nice to serialize a HashMap<HashMap<Array>> to

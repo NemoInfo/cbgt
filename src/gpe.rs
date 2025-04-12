@@ -1,4 +1,5 @@
 use ndarray::{s, Array1, Array2, ArrayView1};
+use struct_field_names_as_array::FieldNamesAsArray;
 use toml::map::Map;
 use toml::Value;
 
@@ -6,8 +7,83 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::parameters::GPeParameters;
-use crate::util::*;
+use crate::{util::*, ModelDescription, EXPERIMENT_BC_FILE_NAME};
 
+#[derive(FieldNamesAsArray)]
+pub struct GPePopulationBoundryConditions {
+  pub count: usize,
+  // State
+  pub v: Array1<f64>,
+  pub n: Array1<f64>,
+  pub h: Array1<f64>,
+  pub r: Array1<f64>,
+  pub ca: Array1<f64>,
+  pub s: Array1<f64>,
+  pub i_ext: Array2<f64>,
+  pub i_app: Array2<f64>,
+
+  // Connection Matrice
+  pub c_g_g: Array2<f64>,
+  pub c_s_g: Array2<f64>,
+}
+
+impl ModelDescription for GPePopulationBoundryConditions {
+  const TYPE: &'static str = "GPe";
+  const EXPERIMENT_FILE_NAME: &'static str = EXPERIMENT_BC_FILE_NAME;
+}
+
+impl GPePopulationBoundryConditions {
+  pub fn from(
+    map: toml::map::Map<String, toml::Value>,
+    gpe_count: usize,
+    stn_count: usize,
+    dt: f64,
+    total_t: f64,
+  ) -> Self {
+    let num_timesteps: usize = (total_t * 1e3 / dt) as usize;
+
+    let pbc = Array1::zeros(gpe_count);
+
+    let v = map.get("v").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim v"));
+    assert_eq!(v.len(), gpe_count);
+    let n = map.get("n").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim n"));
+    assert_eq!(n.len(), gpe_count);
+    let h = map.get("h").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim h"));
+    assert_eq!(h.len(), gpe_count);
+    let r = map.get("r").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim r"));
+    assert_eq!(r.len(), gpe_count);
+    let ca = map.get("ca").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim ca"));
+    assert_eq!(ca.len(), gpe_count);
+    let s = map.get("s").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim s"));
+    assert_eq!(s.len(), gpe_count);
+
+    let i_ext = map.get("i_ext").map_or(Array2::zeros((num_timesteps, stn_count)), |x| {
+      let function = py_function_toml_string_to_py_object(x);
+      vectorize_i_ext_py(&function, dt, total_t, stn_count)
+    });
+
+    let i_app = map.get("i_app").map_or(Array2::zeros((num_timesteps, stn_count)), |x| {
+      let function = py_function_toml_string_to_py_object(x);
+      vectorize_i_ext_py(&function, dt, total_t, stn_count)
+    });
+
+    let c_g_g = map
+      .get("c_g_g")
+      .map(try_toml_value_to_2darray::<f64>)
+      .map_or(Array2::zeros((gpe_count, gpe_count)), |x| x.expect("invalid bc for c_g_s"));
+    assert_eq!(c_g_g.shape(), &[gpe_count, gpe_count]);
+
+    let c_s_g = map
+      .get("c_s_g")
+      .map(try_toml_value_to_2darray::<f64>)
+      .map_or(Array2::zeros((gpe_count, gpe_count)), |x| x.expect("invalid bc for c_g_s"));
+    assert_eq!(c_s_g.shape(), &[stn_count, gpe_count]);
+
+    Self { count: gpe_count, v, n, h, r, ca, s, c_g_g, c_s_g, i_ext, i_app }
+  }
+}
+
+#[derive(Clone)]
 pub struct GPePopulation {
   // State
   pub v: Array2<f64>,
@@ -37,6 +113,20 @@ pub struct GPePopulation {
 }
 
 impl GPePopulation {
+  pub fn with_bcs(mut self, bc: GPePopulationBoundryConditions) -> Self {
+    self.v.row_mut(0).assign(&bc.v);
+    self.n.row_mut(0).assign(&bc.n);
+    self.h.row_mut(0).assign(&bc.h);
+    self.r.row_mut(0).assign(&bc.r);
+    self.ca.row_mut(0).assign(&bc.ca);
+    self.s.row_mut(0).assign(&bc.s);
+    self.c_g_g.assign(&bc.c_g_g);
+    self.c_s_g.assign(&bc.c_s_g);
+    self.i_ext.assign(&bc.i_ext);
+    self.i_app.assign(&bc.i_app);
+    self
+  }
+
   pub fn set_ics_from_config<P: AsRef<Path>>(&mut self, file_path: P, version: &str) {
     let content = std::fs::read_to_string(file_path).expect("Failed to read the config file");
     let value: Value = content.parse().expect("Failed to parse TOML");
@@ -108,33 +198,26 @@ impl GPePopulation {
     }
   }
 
-  pub fn new(
-    num_timesteps: usize,
-    num_neurons: usize,
-    i_ext: Array2<f64>,
-    i_app: Array2<f64>,
-    c_s_g: Array2<f64>,
-    c_g_g: Array2<f64>,
-  ) -> Self {
+  pub fn new(num_timesteps: usize, gpe_count: usize, stn_count: usize) -> Self {
     GPePopulation {
-      v: Array2::zeros((num_timesteps, num_neurons)),
-      n: Array2::zeros((num_timesteps, num_neurons)),
-      h: Array2::zeros((num_timesteps, num_neurons)),
-      r: Array2::zeros((num_timesteps, num_neurons)),
-      ca: Array2::zeros((num_timesteps, num_neurons)),
-      s: Array2::zeros((num_timesteps, num_neurons)),
-      i_l: Array2::zeros((num_timesteps, num_neurons)),
-      i_k: Array2::zeros((num_timesteps, num_neurons)),
-      i_na: Array2::zeros((num_timesteps, num_neurons)),
-      i_t: Array2::zeros((num_timesteps, num_neurons)),
-      i_ca: Array2::zeros((num_timesteps, num_neurons)),
-      i_ahp: Array2::zeros((num_timesteps, num_neurons)),
-      i_s_g: Array2::zeros((num_timesteps, num_neurons)),
-      i_g_g: Array2::zeros((num_timesteps, num_neurons)),
-      i_ext,
-      i_app,
-      c_s_g,
-      c_g_g,
+      v: Array2::zeros((num_timesteps, gpe_count)),
+      n: Array2::zeros((num_timesteps, gpe_count)),
+      h: Array2::zeros((num_timesteps, gpe_count)),
+      r: Array2::zeros((num_timesteps, gpe_count)),
+      ca: Array2::zeros((num_timesteps, gpe_count)),
+      s: Array2::zeros((num_timesteps, gpe_count)),
+      i_l: Array2::zeros((num_timesteps, gpe_count)),
+      i_k: Array2::zeros((num_timesteps, gpe_count)),
+      i_na: Array2::zeros((num_timesteps, gpe_count)),
+      i_t: Array2::zeros((num_timesteps, gpe_count)),
+      i_ca: Array2::zeros((num_timesteps, gpe_count)),
+      i_ahp: Array2::zeros((num_timesteps, gpe_count)),
+      i_s_g: Array2::zeros((num_timesteps, gpe_count)),
+      i_g_g: Array2::zeros((num_timesteps, gpe_count)),
+      i_ext: Array2::zeros((num_timesteps, gpe_count)),
+      i_app: Array2::zeros((num_timesteps, gpe_count)),
+      c_s_g: Array2::zeros((stn_count, gpe_count)),
+      c_g_g: Array2::zeros((gpe_count, gpe_count)),
     }
   }
 

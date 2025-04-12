@@ -16,4 +16,6 @@ pyo3 = "0.24.0"
 numpy = "0.24.0"
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.5"
-
+env_logger = "0.11.8"
+log = "0.4.27"
+struct-field-names-as-array = "0.3.0"

@@ -1,8 +1,10 @@
-use serde::{de::DeserializeOwned, Deserialize};
-use std::{fs, path::Path};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use struct_field_names_as_array::FieldNamesAsArray;
 use toml::Value;
 
-#[derive(Deserialize, Debug)]
+use crate::util::*;
+
+#[derive(Deserialize, Serialize, Debug, FieldNamesAsArray, Clone)]
 #[allow(unused)]
 pub struct STNParameters {
   // Conductances
@@ -81,7 +83,7 @@ pub struct STNParameters {
   pub b_const: f64,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, FieldNamesAsArray, Clone)]
 #[allow(unused)]
 pub struct GPeParameters {
   // Conductances
@@ -154,60 +156,109 @@ pub struct GPeParameters {
   pub sig_g_h: f64,
 }
 
-impl Parameters for STNParameters {
+impl ModelDescription for STNParameters {
   const TYPE: &'static str = "STN";
+  const EXPERIMENT_FILE_NAME: &'static str = EXPERIMENT_PARAMETER_FILE_NAME;
+}
 
-  fn update(self) -> Self {
+impl Parameters for STNParameters {
+  fn post_init(self) -> Self {
     Self { b_const: 1. / (1. + f64::exp(-self.tht_b / self.sig_b)), ..self }
   }
 }
-impl Parameters for GPeParameters {
+
+impl ModelDescription for GPeParameters {
   const TYPE: &'static str = "GPe";
+  const EXPERIMENT_FILE_NAME: &'static str = EXPERIMENT_PARAMETER_FILE_NAME;
 }
 
-pub trait Parameters: DeserializeOwned {
+impl Parameters for GPeParameters {}
+
+pub const DEFAULT_PATH: &'static str = "src/DEFAULT.toml";
+pub const EXPERIMENTS_PATH: &'static str = "experiments";
+pub const EXPERIMENT_PARAMETER_FILE_NAME: &'static str = "PARAMETERS.toml";
+pub const EXPERIMENT_BC_FILE_NAME: &'static str = "BOUNDRY.toml";
+
+pub trait ModelDescription {
   const TYPE: &'static str;
-  fn update(self) -> Self {
+  const EXPERIMENT_FILE_NAME: &'static str;
+
+  fn build_map(
+    use_default: bool,
+    experiment: Option<(&str, Option<&str>)>,
+    custom_map: Option<toml::value::Table>,
+  ) -> toml::value::Table {
+    let mut s = String::new();
+    let map = build(
+      use_default,
+      experiment.map(|(p, v)| {
+        s = format!("{p}/{EXPERIMENT_PARAMETER_FILE_NAME}");
+        (s.as_str(), v)
+      }),
+      custom_map,
+      Self::TYPE,
+    );
+
+    map
+  }
+}
+
+pub trait Parameters: Serialize + DeserializeOwned + ModelDescription {
+  fn post_init(self) -> Self {
     self
   }
 
-  fn from_config<P: AsRef<Path>>(file_path: P, version: &str) -> Self {
-    let content = fs::read_to_string(file_path).expect("Failed to read the config file");
-    let value: Value = content.parse().expect("Failed to parse TOML");
-    let table = value.as_table().expect("Expected a TOML table at the top level");
-
-    let type_table = table
-      .get(Self::TYPE)
-      .expect(&format!("Missing [{}] section", Self::TYPE))
-      .as_table()
-      .expect(&format!("[{}] is not a table", Self::TYPE));
-
-    let default_table = type_table
-      .get("default")
-      .expect(&format!("Missing [{}.default]", Self::TYPE))
-      .as_table()
-      .expect(&format!("[{}.default] is not a table", Self::TYPE));
-
-    let mut merged = default_table.clone();
-
-    if version == "default" {
-      return Value::Table(merged)
-        .try_into::<Self>()
-        .unwrap_or_else(|err| panic!("Failed to deserialize parameters: {err}"))
-        .update();
-    }
-
-    type_table
-      .get(version)
-      .expect(&format!("Missing [{}.{version}]", Self::TYPE))
-      .as_table()
-      .expect(&format!("[{}.{version}] is not a table", Self::TYPE))
-      .iter()
-      .for_each(|(key, val)| _ = merged.insert(key.clone(), val.clone()));
-
-    Value::Table(merged)
+  fn build(
+    use_default: bool,
+    experiment: Option<(&str, Option<&str>)>,
+    custom_map: Option<toml::value::Table>,
+  ) -> Self {
+    toml::Value::Table(Self::build_map(use_default, experiment, custom_map))
       .try_into::<Self>()
-      .unwrap_or_else(|err| panic!("Failed to deserialize parameters: {err}"))
-      .update()
+      .unwrap_or_else(|err| panic!("Failed to deserialize {} parameters:\n{err}", Self::TYPE))
+      .post_init()
+  }
+
+  fn to_toml(&self) -> toml::Value {
+    let table = Value::try_from(&self).unwrap();
+    assert!(table.is_table());
+    table
+  }
+}
+
+#[cfg(test)]
+mod parameters {
+  use super::*;
+
+  #[test]
+  fn test_default() {
+    let stn = STNParameters::build(true, None, None);
+    assert_eq!(stn.g_l, 2.25);
+    assert_eq!(stn.g_k, 45.);
+    assert_ne!(stn.b_const, f64::NAN);
+    let gpe = GPeParameters::build(true, None, None);
+    assert_eq!(gpe.g_l, 0.1);
+    assert_eq!(gpe.g_k, 30.);
+  }
+
+  #[test]
+  fn test_load_experiment() {
+    let stn = STNParameters::build(true, Some(("wave_rt", None)), None);
+    assert_eq!(stn.g_l, 2.25);
+    assert_eq!(stn.g_g_s, 1.);
+    let gpe = GPeParameters::build(true, Some(("wave_rt", Some("v1"))), None);
+    assert_eq!(gpe.g_g_g, 0.025);
+    assert_eq!(gpe.g_s_g, 0.03);
+  }
+
+  #[test]
+  fn test_load_custom_experiment() {
+    let gpe =
+      GPeParameters::build(true, Some(("wave_rt", None)), Some(read_map_from_toml("src/TEST.toml", None, "GPe")));
+    assert_eq!(gpe.g_l, 0.1);
+    let stn =
+      STNParameters::build(true, Some(("wave_rt", None)), Some(read_map_from_toml("src/TEST.toml", None, "STN")));
+    assert_eq!(stn.g_l, -99.);
+    assert_eq!(stn.g_g_s, 1.);
   }
 }

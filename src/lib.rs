@@ -1,21 +1,26 @@
+use log::{debug, info};
 use ndarray::{Array2, ArrayView2};
-use numpy::{IntoPyArray, PyArray2, PyArrayMethods};
-use pyo3::{ffi::c_str, prelude::*, types::PyDict};
+use numpy::IntoPyArray;
+use pyo3::types::PyString;
+use pyo3::{prelude::*, types::PyDict};
+use struct_field_names_as_array::FieldNamesAsArray;
 
+use std::io::Write;
 use std::sync::Arc;
-use std::{collections::HashMap, path::PathBuf, thread};
+use std::time::Instant;
+use std::{collections::HashMap, thread};
 
 mod parameters;
 use parameters::*;
 
 mod stn;
-use stn::STNPopulation;
+use stn::{STNPopulation, STNPopulationBoundryConditions};
 
 mod gpe;
-use gpe::GPePopulation;
+use gpe::{GPePopulation, GPePopulationBoundryConditions};
 
 mod util;
-use util::SpinBarrier;
+use util::*;
 
 /// Rubin Terman model using Euler's method
 #[allow(unused)]
@@ -27,47 +32,50 @@ pub struct RubinTerman {
   /// Simulation time (s)
   #[pyo3(get)]
   pub total_t: f64,
-  /// Parameter file path
-  pub parameters_file: PathBuf,
-  /// Parameter file path
-  pub parameters_settings: String,
-  /// Number of neurons in STN
-  #[pyo3(get)]
-  pub num_stn: usize,
-  /// Number of neurons in GPe
-  #[pyo3(get)]
-  pub num_gpe: usize,
-  /// External STN current
-  pub i_ext_stn: Array2<f64>,
-  /// External GPe current
-  pub i_ext_gpe: Array2<f64>,
-  /// Subcortical simulated GPe current
-  pub i_app_gpe: Array2<f64>,
-  /// GPe -> STN connectivity matrix
-  pub c_g_s: Array2<f64>,
-  /// GPe -> GPe connectivity matrix
-  pub c_g_g: Array2<f64>,
-  /// STN -> GPe connectivity matrix
-  pub c_s_g: Array2<f64>,
+  pub stn_population: STNPopulation,
+  pub stn_parameters: STNParameters,
+  pub gpe_population: GPePopulation,
+  pub gpe_parameters: GPeParameters,
 }
 
 impl RubinTerman {
-  pub fn new(num_stn: usize, num_gpe: usize, dt: f64, total_t: f64) -> Self {
+  pub fn new(
+    stn_count: usize,
+    gpe_count: usize,
+    dt: f64,
+    total_t: f64,
+    use_default: bool,
+    experiment: Option<(&str, Option<&str>)>,
+    custom_file: Option<&str>,
+  ) -> Self {
     let num_timesteps: usize = (total_t * 1e3 / dt) as usize;
 
-    RubinTerman {
+    let custom_stn = custom_file.map(|f| read_map_from_toml(f, None, "STN"));
+    let custom_gpe = custom_file.map(|f| read_map_from_toml(f, None, "GPe"));
+
+    let stn_bcs = STNPopulationBoundryConditions::from(
+      STNPopulationBoundryConditions::build_map(use_default, experiment, custom_stn.clone()),
+      stn_count,
+      gpe_count,
       dt,
       total_t,
-      num_stn,
-      num_gpe,
-      parameters_file: "src/PARAMETERS.toml".into(),
-      parameters_settings: "default".to_owned(),
-      i_ext_stn: Array2::zeros((num_timesteps, num_stn)),
-      i_ext_gpe: Array2::zeros((num_timesteps, num_gpe)),
-      i_app_gpe: Array2::zeros((num_timesteps, num_gpe)),
-      c_g_s: Array2::zeros((num_gpe, num_stn)),
-      c_g_g: Array2::zeros((num_gpe, num_gpe)),
-      c_s_g: Array2::zeros((num_stn, num_gpe)),
+    );
+
+    let gpe_bcs = GPePopulationBoundryConditions::from(
+      GPePopulationBoundryConditions::build_map(use_default, experiment, custom_gpe.clone()),
+      gpe_count,
+      stn_count,
+      dt,
+      total_t,
+    );
+
+    Self {
+      dt,
+      total_t,
+      stn_population: STNPopulation::new(num_timesteps, stn_count, gpe_count).with_bcs(stn_bcs),
+      stn_parameters: STNParameters::build(use_default, experiment, custom_stn),
+      gpe_population: GPePopulation::new(num_timesteps, gpe_count, stn_count).with_bcs(gpe_bcs),
+      gpe_parameters: GPeParameters::build(use_default, experiment, custom_gpe),
     }
   }
 }
@@ -75,21 +83,19 @@ impl RubinTerman {
 impl RubinTerman {
   pub fn _run(&mut self) -> HashMap<&str, HashMap<&str, Array2<f64>>> {
     let num_timesteps: usize = (self.total_t * 1e3 / self.dt) as usize;
-    let stn_parameters = STNParameters::from_config(&self.parameters_file, &self.parameters_settings);
-    let gpe_parameters = GPeParameters::from_config(&self.parameters_file, &self.parameters_settings);
 
-    let mut stn = STNPopulation::new(num_timesteps, self.num_stn, self.i_ext_stn.clone(), self.c_g_s.clone());
-    let mut gpe = GPePopulation::new(
-      num_timesteps,
-      self.num_stn,
-      self.i_ext_gpe.clone(),
-      self.i_app_gpe.clone(),
-      self.c_s_g.clone(),
-      self.c_g_g.clone(),
-    );
+    debug!("Computing {} timesteps", format_number(num_timesteps));
 
-    stn.set_ics_from_config(&self.parameters_file, &self.parameters_settings);
-    gpe.set_ics_from_config(&self.parameters_file, &self.parameters_settings);
+    let stn_parameters = self.stn_parameters.clone();
+    let gpe_parameters = self.gpe_parameters.clone();
+    let mut stn = self.stn_population.clone();
+    let mut gpe = self.gpe_population.clone();
+
+    //debug!("{} STN neurons", self.stn_population.count);
+    //debug!("{} GPe neurons", self.num_gpe);
+    debug!("STN -> GPe\n{:?}", gpe.c_s_g.mapv(|x| x as isize));
+    debug!("GPe -> GPe\n{:?}", gpe.c_g_g.mapv(|x| x as isize));
+    debug!("GPe -> STN\n{:?}", stn.c_g_s.mapv(|x| x as isize));
 
     let spin_barrier = Arc::new(SpinBarrier::new(2));
 
@@ -100,26 +106,37 @@ impl RubinTerman {
     let gpe_s = unsafe { ArrayView2::from_shape_ptr(gpe.s.raw_dim(), gpe.s.as_ptr()) };
     let stn_s = unsafe { ArrayView2::from_shape_ptr(stn.s.raw_dim(), stn.s.as_ptr()) };
 
+    let start = Instant::now();
     let barrier = spin_barrier.clone();
     let stn_thread = thread::spawn(move || {
+      let start = Instant::now();
       for it in 0..num_timesteps - 1 {
         barrier.wait();
         stn.euler_step(it, dt, &stn_parameters, &gpe_s.row(it));
       }
+      debug!("STN time: {:.2}s", start.elapsed().as_secs_f64());
       stn
     });
 
     let barrier = spin_barrier;
     let gpe_thread = thread::spawn(move || {
+      let start = Instant::now();
       for it in 0..num_timesteps - 1 {
         barrier.wait();
         gpe.euler_step(it, dt, &gpe_parameters, &stn_s.row(it));
       }
+      debug!("GPe time: {:.2}s", start.elapsed().as_secs_f64());
       gpe
     });
 
     let stn = stn_thread.join().expect("STN thread panicked!");
     let gpe = gpe_thread.join().expect("GPe thread panicked!");
+
+    info!(
+      "Total real time: {:.2}s at {:.0} ms/sim_s",
+      start.elapsed().as_secs_f64(),
+      start.elapsed().as_secs_f64() / self.total_t * 1e3
+    );
 
     #[rustfmt::skip]
     let combined = HashMap::<&str, HashMap<&str, Array2<f64>>>::from([
@@ -153,98 +170,225 @@ impl RubinTerman {
 
     combined
   }
+}
 
-  pub fn vectorize_i_ext<F>(i_ext: F, dt: f64, total_t: f64, num_neurons: usize) -> Array2<f64>
-  where
-    F: Fn(f64, usize) -> f64,
-  {
-    let num_timesteps: usize = (total_t * 1e3 / dt) as usize;
-    let mut a = Array2::<f64>::zeros((num_timesteps, num_neurons));
-    for n in 0..num_neurons {
-      for it in 0..num_timesteps {
-        a[[it, n]] = i_ext(it as f64 * dt, n);
-      }
+fn get_py_function_source(f: &PyObject) -> Option<String> {
+  pyo3::prepare_freethreaded_python();
+  Python::with_gil(|py| {
+    Some(
+      PyModule::import(py, "inspect")
+        .ok()?
+        .getattr("getsource")
+        .ok()?
+        .call1((f,))
+        .ok()?
+        .downcast::<PyString>()
+        .ok()?
+        .to_string(),
+    )
+  })
+}
+
+fn get_py_object_name(obj: &PyObject) -> Option<String> {
+  pyo3::prepare_freethreaded_python();
+  Python::with_gil(|py| Some(obj.getattr(py, "__name__").ok()?.downcast_bound::<PyString>(py).ok()?.to_string()))
+}
+
+fn parse_toml_value(k: &str, v: &str) -> toml::Value {
+  let kv = format!("{k}={v}");
+  match kv.parse() {
+    Ok(v) => v,
+    Err(_) => {
+      let kv = format!(
+        "{k}={}",
+        v.replace("array(", "") // numpy.ndarray to toml array
+          .replace(")", "")
+          .replace(".,", ".0,") // "2." is not valid toml float but "2.0" is
+          .replace(".]", ".0]")
+          .replace("True", "true") // Python bool to toml bool
+          .replace("False", "false")
+      );
+      kv.parse().expect("Expected numpy array in the form \"array([1,2,3])\"")
     }
-    a
   }
-
-  pub fn vectorize_i_ext_py(i_ext_py: &PyObject, dt: f64, total_t: f64, num_neurons: usize) -> Array2<f64> {
-    let num_timesteps: usize = (total_t * 1e3 / dt) as usize;
-    pyo3::prepare_freethreaded_python();
-    Python::with_gil(|py| {
-      let mut a = Array2::<f64>::zeros((num_timesteps, num_neurons));
-      for n in 0..num_neurons {
-        for it in 0..num_timesteps {
-          a[[it, n]] = i_ext_py.call1(py, (it as f64 * dt, n)).unwrap().extract(py).unwrap();
-        }
-      }
-      a
-    })
-  }
-}
-
-fn default_i_ext_py() -> PyObject {
-  pyo3::prepare_freethreaded_python();
-  Python::with_gil(|py| py.eval(c_str!("lambda t, n: 0.0"), None, None).unwrap().into())
-}
-
-fn pyarray_to_ndarray<T: numpy::Element>(arr: Py<PyArray2<T>>) -> Array2<T> {
-  pyo3::prepare_freethreaded_python();
-  Python::with_gil(|py| arr.bind(py).to_owned_array())
 }
 
 #[pymethods]
 impl RubinTerman {
+  #[pyo3(signature=(dt=0.01, total_t=2., experiment=None, experiment_version=None, 
+                    parameters_file=None, boundry_ic_file=None, use_default=true,
+                    stn_i_ext=None, gpe_i_ext=None, gpe_i_app=None, save_dir=Some("/tmp/cbgt_last_model".to_owned()), **kwds))]
   #[new]
-  #[pyo3(signature = (dt = 0.01, total_t = 2.0, parameters_file = PathBuf::from("src/PARAMETERS.toml"),  
-      parameters_settings="default".to_owned(), num_stn=10, num_gpe=10, 
-      i_ext_stn=default_i_ext_py(), i_ext_gpe=default_i_ext_py(), i_app_gpe=default_i_ext_py(),
-      c_g_s=None, c_s_g=None, c_g_g=None)
-    )]
   fn new_py(
     dt: f64,
     total_t: f64,
-    parameters_file: PathBuf,
-    parameters_settings: String,
-    num_stn: usize,
-    num_gpe: usize,
-    i_ext_stn: PyObject,
-    i_ext_gpe: PyObject,
-    i_app_gpe: PyObject,
-    c_g_s: Option<Py<PyArray2<f64>>>,
-    c_s_g: Option<Py<PyArray2<f64>>>,
-    c_g_g: Option<Py<PyArray2<f64>>>,
+    experiment: Option<&str>,
+    experiment_version: Option<&str>,
+    parameters_file: Option<&str>,
+    boundry_ic_file: Option<&str>,
+    use_default: bool,
+    stn_i_ext: Option<PyObject>,
+    gpe_i_ext: Option<PyObject>,
+    gpe_i_app: Option<PyObject>,
+    save_dir: Option<String>, // Maybe add datetime to temp save
+    kwds: Option<&Bound<'_, PyDict>>,
   ) -> Self {
-    Self {
-      dt,
-      total_t,
-      parameters_file,
-      parameters_settings,
-      num_stn,
-      num_gpe,
-      i_ext_stn: Self::vectorize_i_ext_py(&i_ext_stn, dt, total_t, num_stn),
-      i_ext_gpe: Self::vectorize_i_ext_py(&i_ext_gpe, dt, total_t, num_gpe),
-      i_app_gpe: Self::vectorize_i_ext_py(&i_app_gpe, dt, total_t, num_gpe),
-      c_g_s: match c_g_s {
-        None => Array2::zeros((num_gpe, num_stn)),
-        Some(arr) => pyarray_to_ndarray(arr),
-      },
-      c_s_g: match c_s_g {
-        None => Array2::zeros((num_gpe, num_stn)),
-        Some(arr) => pyarray_to_ndarray(arr),
-      },
-      c_g_g: match c_g_g {
-        None => Array2::zeros((num_gpe, num_stn)),
-        Some(arr) => pyarray_to_ndarray(arr),
-      },
+    env_logger::init();
+    assert!(experiment.is_some() || experiment_version.is_none(), "Experiment version requires experiment");
+
+    if let Some(save_dir) = &save_dir {
+      std::fs::create_dir_all(save_dir).expect("Could not create save folder");
     }
+
+    let experiment = experiment.map(|name| (name, experiment_version));
+
+    let mut map_stn_params = toml::map::Map::new();
+    let mut map_gpe_params = toml::map::Map::new();
+    let mut map_stn_bcs = toml::map::Map::new();
+    let mut map_gpe_bcs = toml::map::Map::new();
+
+    // Pars custom parameter / bc keywords
+    if let Some(kwds) = kwds {
+      for (key, v) in kwds {
+        if let Some(k) = key.to_string().strip_prefix("stn_") {
+          if STNParameters::FIELD_NAMES_AS_ARRAY.contains(&k) {
+            let kv: toml::Value = format!("{}={}", k.to_string(), v.to_string()).parse().unwrap();
+            update_toml_map(&mut map_stn_params, kv.as_table().unwrap().to_owned());
+          } else if STNPopulationBoundryConditions::FIELD_NAMES_AS_ARRAY.contains(&k) {
+            let kv: toml::Value = parse_toml_value(k, &format!("{v:?}"));
+            update_toml_map(&mut map_stn_bcs, kv.as_table().unwrap().to_owned());
+          } else {
+            panic!("Unrecognized kwarg {key}");
+          }
+        } else if let Some(k) = key.to_string().strip_prefix("gpe_") {
+          if GPeParameters::FIELD_NAMES_AS_ARRAY.contains(&k) {
+            let kv: toml::Value = format!("{}={}", k.to_string(), v.to_string()).parse().unwrap();
+            update_toml_map(&mut map_gpe_params, kv.as_table().unwrap().to_owned());
+          } else if GPePopulationBoundryConditions::FIELD_NAMES_AS_ARRAY.contains(&k) {
+            let kv: toml::Value = parse_toml_value(k, &format!("{v:?}"));
+            update_toml_map(&mut map_gpe_bcs, kv.as_table().unwrap().to_owned());
+          } else {
+            panic!("Unrecognized kwarg {key}");
+          }
+        } else {
+          panic!("Unrecognized kwarg {key}");
+        }
+      }
+    }
+
+    assert!(
+      parameters_file.is_none() || (map_stn_params.is_empty() && map_gpe_params.is_empty()),
+      "Cannot custom parameter by keyword and by file at the same time!"
+    );
+
+    if let Some(file_path) = parameters_file {
+      map_stn_params = read_map_from_toml(file_path, None, "STN");
+      map_gpe_params = read_map_from_toml(file_path, None, "GPe");
+    }
+
+    let stn_parameters = STNParameters::build(use_default, experiment, Some(map_stn_params));
+    let gpe_parameters = GPeParameters::build(use_default, experiment, Some(map_gpe_params));
+
+    if let Some(save_dir) = &save_dir {
+      let parameter_map = toml::value::Table::from_iter([
+        ("STN".to_owned(), stn_parameters.to_toml()),
+        ("GPe".to_owned(), gpe_parameters.to_toml()),
+      ]);
+
+      let file_path: std::path::PathBuf = format!("{save_dir}/{EXPERIMENT_PARAMETER_FILE_NAME}").into();
+      let mut file = std::fs::File::create(&file_path).unwrap();
+      write!(file, "{}", toml::Value::Table(parameter_map)).unwrap();
+      info!("Saved parameters at [{}]", file_path.canonicalize().unwrap().display());
+    }
+
+    if let Some(file_path) = boundry_ic_file {
+      map_stn_bcs = read_map_from_toml(file_path, None, "STN");
+      map_gpe_bcs = read_map_from_toml(file_path, None, "GPe");
+    }
+
+    let stn_count = map_stn_bcs
+      .get("count")
+      .expect("STN Population count not found")
+      .as_integer()
+      .expect("integer")
+      .try_into()
+      .expect("usize");
+
+    let gpe_count = map_gpe_bcs
+      .get("count")
+      .expect("GPe Population count not found")
+      .as_integer()
+      .expect("integer")
+      .try_into()
+      .expect("usize");
+
+    let num_timesteps: usize = (total_t * 1e3 / dt) as usize;
+
+    let mut function_sources: HashMap<String, String> = HashMap::new();
+
+    if let Some(stn_i_ext) = stn_i_ext {
+      // Maybe this should be a wraning
+      let (src, name) = get_py_function_source_and_name(&stn_i_ext).expect("Could not get source and name of function");
+      function_sources.insert(name.clone(), src);
+      map_stn_bcs
+        .insert("i_ext".to_owned(), toml::Value::String(format!("{}/functions.{name}", save_dir.as_ref().unwrap())));
+      // Maybe create the module from source directly and only optionally saving the file
+    }
+
+    if let Some(gpe_i_ext) = gpe_i_ext {
+      // Maybe this should be a wraning
+      let (src, name) = get_py_function_source_and_name(&gpe_i_ext).expect("Could not get source and name of function");
+      function_sources.insert(name.clone(), src);
+      map_gpe_bcs
+        .insert("i_ext".to_owned(), toml::Value::String(format!("{}/functions.{name}", save_dir.as_ref().unwrap())));
+      // Bad unwrap
+    }
+
+    if let Some(gpe_i_app) = gpe_i_app {
+      // Maybe this should be a wraning
+      let (src, name) = get_py_function_source_and_name(&gpe_i_app).expect("Could not get source and name of function");
+      function_sources.insert(name.clone(), src);
+      map_gpe_bcs
+        .insert("i_app".to_owned(), toml::Value::String(format!("{}/functions.{name}", save_dir.as_ref().unwrap())));
+      // Bad unwrap
+    }
+
+    if let Some(save_dir) = &save_dir {
+      let file_path = format!("{save_dir}/functions.py");
+      std::fs::File::create(&file_path).unwrap();
+      let mut file = std::fs::OpenOptions::new().append(true).open(&file_path).unwrap();
+      info!("Saved functions  at [{save_dir}/functions.py]");
+
+      for src in function_sources.values() {
+        writeln!(file, "{src}").unwrap();
+      }
+    }
+
+    let stn_bcs = STNPopulationBoundryConditions::from(map_stn_bcs, stn_count, gpe_count, dt, total_t);
+    let stn_population = STNPopulation::new(num_timesteps, stn_count, gpe_count).with_bcs(stn_bcs);
+
+    let gpe_bcs = GPePopulationBoundryConditions::from(map_gpe_bcs, gpe_count, stn_count, dt, total_t);
+    let gpe_population = GPePopulation::new(num_timesteps, stn_count, gpe_count).with_bcs(gpe_bcs);
+
+    // TODO Save bcs
+
+    Self { dt, total_t, stn_population, stn_parameters, gpe_population, gpe_parameters }
   }
 
   fn run(&mut self, py: Python) -> Py<PyDict> {
     let res = self._run();
-    println!("Simulation completed!");
     to_python_dict(py, res)
   }
+}
+
+fn get_py_function_source_and_name(f: &PyObject) -> Option<(String, String)> {
+  let src = get_py_function_source(&f)?;
+  let mut name = get_py_object_name(&f)?;
+  if name == "<lambda>" {
+    name = src.split_once('=').unwrap().0.trim().to_owned();
+  }
+
+  Some((src, name))
 }
 
 fn to_python_dict<'py>(py: Python, rust_map: HashMap<&str, HashMap<&str, Array2<f64>>>) -> Py<PyDict> {
@@ -281,7 +425,7 @@ mod rubin_terman {
     let dt = 0.01;
     let total_t = 1.;
     let num_neurons = 5;
-    let a = RubinTerman::vectorize_i_ext_py(
+    let a = vectorize_i_ext_py(
       &Python::with_gil(|py| py.eval(c_str!("lambda t, n: 6.9 if t < 500 else 9.6"), None, None).unwrap().into()),
       dt,
       total_t,
@@ -290,7 +434,7 @@ mod rubin_terman {
     assert_eq!(a[[0, 0]], 6.9);
     assert_eq!(a[[a.shape()[0] - 1, 0]], 9.6);
 
-    let a = RubinTerman::vectorize_i_ext_py(
+    let a = vectorize_i_ext_py(
       &Python::with_gil(|py| py.eval(c_str!("lambda t, n: 6.9 if t < 500 else 9.6"), None, None).unwrap().into()),
       0.1,
       total_t,
@@ -302,20 +446,23 @@ mod rubin_terman {
 
   #[test]
   fn test_vectorize_i_ext_rust() {
-    let a = RubinTerman::vectorize_i_ext(|t, _| if t < 500. { 6.9 } else { 9.6 }, 0.01, 1., 5);
+    let a = vectorize_i_ext(|t, _| if t < 500. { 6.9 } else { 9.6 }, 0.01, 1., 5);
     assert_eq!(a[[0, 0]], 6.9);
     assert_eq!(a[[a.shape()[0] - 1, 0]], 9.6);
-    let a = RubinTerman::vectorize_i_ext(|t, _| if t < 500. { 6.9 } else { 9.6 }, 0.1, 1., 5);
+    let a = vectorize_i_ext(|t, _| if t < 500. { 6.9 } else { 9.6 }, 0.1, 1., 5);
     assert_eq!(a[[0, 0]], 6.9);
     assert_eq!(a[[a.shape()[0] - 1, 0]], 9.6);
   }
 
+  // #[test]
+  // fn test_load_ics() {
+  //   let rt = RubinTerman::new(10, 10, 0.02, 2., true, None, None);
+  //   dbg!(rt.stn_population.v.row(0));
+  //   assert!(false);
+  // }
+
   #[test]
-  fn test_load_ics() {
-    let rt = RubinTerman { parameters_settings: "test".to_string(), ..RubinTerman::new(10, 10, 0.01, 2.) };
-    let mut stn = STNPopulation::new(10, rt.num_stn, rt.i_ext_stn.clone(), rt.c_g_s.clone());
-    stn.set_ics_from_config(&rt.parameters_file, &rt.parameters_settings);
-    assert_eq!(stn.h[[0, 0]], -69.);
-    assert_eq!(stn.v[[0, 9]], -59.20177081754847);
+  fn get_py_function_source() {
+    assert!(false);
   }
 }
