@@ -1,7 +1,6 @@
 use log::{debug, info};
 use ndarray::{Array2, ArrayView2};
 use numpy::IntoPyArray;
-use pyo3::types::PyString;
 use pyo3::{prelude::*, types::PyDict};
 use struct_field_names_as_array::FieldNamesAsArray;
 
@@ -172,47 +171,6 @@ impl RubinTerman {
   }
 }
 
-fn get_py_function_source(f: &PyObject) -> Option<String> {
-  pyo3::prepare_freethreaded_python();
-  Python::with_gil(|py| {
-    Some(
-      PyModule::import(py, "inspect")
-        .ok()?
-        .getattr("getsource")
-        .ok()?
-        .call1((f,))
-        .ok()?
-        .downcast::<PyString>()
-        .ok()?
-        .to_string(),
-    )
-  })
-}
-
-fn get_py_object_name(obj: &PyObject) -> Option<String> {
-  pyo3::prepare_freethreaded_python();
-  Python::with_gil(|py| Some(obj.getattr(py, "__name__").ok()?.downcast_bound::<PyString>(py).ok()?.to_string()))
-}
-
-fn parse_toml_value(k: &str, v: &str) -> toml::Value {
-  let kv = format!("{k}={v}");
-  match kv.parse() {
-    Ok(v) => v,
-    Err(_) => {
-      let kv = format!(
-        "{k}={}",
-        v.replace("array(", "") // numpy.ndarray to toml array
-          .replace(")", "")
-          .replace(".,", ".0,") // "2." is not valid toml float but "2.0" is
-          .replace(".]", ".0]")
-          .replace("True", "true") // Python bool to toml bool
-          .replace("False", "false")
-      );
-      kv.parse().expect("Expected numpy array in the form \"array([1,2,3])\"")
-    }
-  }
-}
-
 #[pymethods]
 impl RubinTerman {
   #[pyo3(signature=(dt=0.01, total_t=2., experiment=None, experiment_version=None, 
@@ -247,7 +205,7 @@ impl RubinTerman {
     let mut map_stn_bcs = toml::map::Map::new();
     let mut map_gpe_bcs = toml::map::Map::new();
 
-    // Pars custom parameter / bc keywords
+    // Parse custom parameter/boundry keywords
     if let Some(kwds) = kwds {
       for (key, v) in kwds {
         if let Some(k) = key.to_string().strip_prefix("stn_") {
@@ -278,7 +236,7 @@ impl RubinTerman {
 
     assert!(
       parameters_file.is_none() || (map_stn_params.is_empty() && map_gpe_params.is_empty()),
-      "Cannot custom parameter by keyword and by file at the same time!"
+      "Cannot give parameter both by keyword and by file at the same time!"
     );
 
     if let Some(file_path) = parameters_file {

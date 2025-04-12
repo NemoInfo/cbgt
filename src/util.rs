@@ -199,3 +199,46 @@ where
   }
   a
 }
+
+pub fn get_py_function_source(f: &PyObject) -> Option<String> {
+  pyo3::prepare_freethreaded_python();
+  Python::with_gil(|py| {
+    Some(
+      PyModule::import(py, "inspect")
+        .ok()?
+        .getattr("getsource")
+        .ok()?
+        .call1((f,))
+        .ok()?
+        .downcast::<pyo3::types::PyString>()
+        .ok()?
+        .to_string(),
+    )
+  })
+}
+
+pub fn get_py_object_name(obj: &PyObject) -> Option<String> {
+  pyo3::prepare_freethreaded_python();
+  Python::with_gil(|py| {
+    Some(obj.getattr(py, "__name__").ok()?.downcast_bound::<pyo3::types::PyString>(py).ok()?.to_string())
+  })
+}
+
+pub fn parse_toml_value(k: &str, v: &str) -> toml::Value {
+  let kv = format!("{k}={v}");
+  match kv.parse() {
+    Ok(v) => v,
+    Err(_) => {
+      let kv = format!(
+        "{k}={}",
+        v.replace("array(", "") // numpy.ndarray to toml array
+          .replace(")", "")
+          .replace(".,", ".0,") // "2." is not valid toml float but "2.0" is
+          .replace(".]", ".0]")
+          .replace("True", "true") // Python bool to toml bool
+          .replace("False", "false")
+      );
+      kv.parse().expect("Expected numpy array in the form \"array([1,2,3])\"")
+    }
+  }
+}

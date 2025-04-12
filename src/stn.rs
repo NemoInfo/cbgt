@@ -1,10 +1,5 @@
 use ndarray::{s, Array1, Array2, ArrayView1};
 use struct_field_names_as_array::FieldNamesAsArray;
-use toml::map::Map;
-use toml::Value;
-
-use std::collections::HashMap;
-use std::path::Path;
 
 use crate::parameters::STNParameters;
 use crate::util::*;
@@ -117,78 +112,6 @@ impl STNPopulation {
     self.c_g_s.assign(&bc.c_g_s);
     self.i_ext.assign(&bc.i_ext);
     self
-  }
-
-  pub fn set_ics_from_config<P: AsRef<Path>>(&mut self, file_path: P, version: &str) {
-    let content = std::fs::read_to_string(file_path).expect("Failed to read the config file");
-    let value: Value = content.parse().expect("Failed to parse TOML");
-    let table = value.as_table().expect("Expected a TOML table at the top level");
-
-    let pop_type = "STN";
-    let type_table = table
-      .get(pop_type)
-      .expect(&format!("Missing [{}] section", pop_type))
-      .as_table()
-      .expect(&format!("[{}] is not a table", pop_type));
-
-    let default_table = type_table
-      .get("default")
-      .expect(&format!("missing [{}.default]", pop_type))
-      .as_table()
-      .expect(&format!("[{}.default] is not a table", pop_type));
-
-    let Some(default_ics) = default_table.get("init") else {
-      println!("[WARN] [STN.default.init] not found, setting all inner state to 0");
-      return;
-    };
-    let default_ics = default_ics.as_table().expect("[STN.default.init] should be a table");
-    self.load_ics_from_table(&default_ics);
-
-    if version == "default" {
-      return;
-    }
-
-    let alt_table = type_table
-      .get(version)
-      .expect(&format!("missing [{}.{version}]", pop_type))
-      .as_table()
-      .expect(&format!("[{}.{version}] is not a table", pop_type));
-
-    if let Some(alt_ics) = alt_table.get("init") {
-      let alt_ics = alt_ics.as_table().expect(&format!("[STN.{version}.init] should be a table"));
-      self.load_ics_from_table(&alt_ics);
-    }
-  }
-
-  fn load_ics_from_table(&mut self, ic_table: &Map<String, Value>) {
-    let mut state = HashMap::from([
-      ("v", &mut self.v),
-      ("n", &mut self.n),
-      ("h", &mut self.h),
-      ("r", &mut self.r),
-      ("ca", &mut self.ca),
-      ("s", &mut self.s),
-    ]);
-    for (k, v) in ic_table {
-      if let Some(state) = state.get_mut(k.as_str()) {
-        if state.shape()[1] != v.as_array().expect("array").len() {
-          return;
-        }
-        state.row_mut(0).assign(&Array1::<f64>::from(
-          v.as_array()
-            .expect("Initial condition entry should be array")
-            .iter()
-            .map(|x| {
-              x.as_float()
-                .or(x.as_integer().and_then(|x| Some(x as f64)))
-                .expect(&format!("Expected integer or floating point, got {x:?}"))
-            })
-            .collect::<Vec<f64>>(),
-        ));
-      } else {
-        println!("[WARN] initial condition entry {k} is invalid");
-      }
-    }
   }
 
   pub fn new(num_timesteps: usize, stn_count: usize, gpe_count: usize) -> Self {
