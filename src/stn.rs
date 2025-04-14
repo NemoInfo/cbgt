@@ -1,3 +1,4 @@
+use log::debug;
 use ndarray::{s, Array1, Array2, ArrayView1};
 use struct_field_names_as_array::FieldNamesAsArray;
 
@@ -6,8 +7,7 @@ use crate::util::*;
 use crate::ModelDescription;
 use crate::EXPERIMENT_BC_FILE_NAME;
 
-#[derive(FieldNamesAsArray)]
-#[allow(dead_code)]
+#[derive(FieldNamesAsArray, Debug)]
 pub struct STNPopulationBoundryConditions {
   pub count: usize,
   // State
@@ -26,12 +26,22 @@ pub struct STNPopulationBoundryConditions {
 impl ModelDescription for STNPopulationBoundryConditions {
   const TYPE: &'static str = "STN";
   const EXPERIMENT_FILE_NAME: &'static str = EXPERIMENT_BC_FILE_NAME;
+  const DEFAULT_PATH: Option<&'static str> = None;
 }
 
 impl STNPopulationBoundryConditions {
-  #[allow(unused)]
-  pub fn to_toml(i_ext_py_qualified_name: &str) {
-    todo!()
+  pub fn to_toml(&self, i_ext_py_qualified_name: &str) -> toml::Value {
+    let mut table = toml::value::Table::new();
+    table.insert("v".to_owned(), self.v.to_vec().into());
+    table.insert("n".to_owned(), self.n.to_vec().into());
+    table.insert("h".to_owned(), self.h.to_vec().into());
+    table.insert("r".to_owned(), self.r.to_vec().into());
+    table.insert("ca".to_owned(), self.ca.to_vec().into());
+    table.insert("s".to_owned(), self.s.to_vec().into());
+    table.insert("c_g_s".to_owned(), self.c_g_s.rows().into_iter().map(|x| x.to_vec()).collect::<Vec<_>>().into());
+    table.insert("i_ext".to_owned(), toml::Value::String(i_ext_py_qualified_name.to_owned()));
+
+    toml::Value::Table(table)
   }
 
   pub fn from(
@@ -41,9 +51,7 @@ impl STNPopulationBoundryConditions {
     dt: f64,
     total_t: f64,
   ) -> Self {
-    let num_timesteps: usize = (total_t * 1e3 / dt) as usize;
-
-    let pbc = Array1::ones(stn_count);
+    let pbc = Array1::zeros(stn_count); // TODO wathafuq
 
     let v = map.get("v").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim v"));
     assert_eq!(v.len(), stn_count);
@@ -58,10 +66,10 @@ impl STNPopulationBoundryConditions {
     let s = map.get("s").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim s"));
     assert_eq!(s.len(), stn_count);
 
-    let i_ext = map.get("i_ext").map_or(Array2::zeros((num_timesteps, stn_count)), |x| {
-      let function = py_function_toml_string_to_py_object(x);
-      vectorize_i_ext_py(&function, dt, total_t, stn_count)
-    });
+    let i_ext_f = toml_py_function_qualname_to_py_object(map.get("i_ext").expect("default should be set by caller"));
+    let i_ext = vectorize_i_ext_py(&i_ext_f, dt, total_t, stn_count);
+
+    debug!("STN I_ext vectorized to\n{i_ext}");
 
     let c_g_s = map
       .get("c_g_s")

@@ -7,7 +7,7 @@ use std::{
   sync::atomic::{AtomicUsize, Ordering},
 };
 
-use crate::{DEFAULT_PATH, EXPERIMENTS_PATH};
+use crate::EXPERIMENTS_PATH;
 
 pub fn x_inf<D: Dimension>(v: &ArrayView<f64, D>, tht_x: f64, sig_x: f64) -> Array<f64, D> {
   1. / (1. + ((tht_x - v) / sig_x).exp())
@@ -130,15 +130,15 @@ pub fn read_map_from_toml<P: AsRef<Path>>(file_path: P, version: Option<&str>, m
 }
 
 pub fn build(
-  use_default: bool,
+  use_default: Option<&str>,
   experiment: Option<(&str, Option<&str>)>,
   custom_map: Option<toml::map::Map<String, toml::Value>>,
   map_name: &str,
 ) -> toml::map::Map<String, toml::Value> {
   let mut map = toml::map::Map::new();
 
-  if use_default {
-    update_toml_map(&mut map, read_map_from_toml(DEFAULT_PATH, None, map_name));
+  if let Some(path) = use_default {
+    update_toml_map(&mut map, read_map_from_toml(path, None, map_name));
   }
 
   if let Some((experiment, version)) = experiment {
@@ -151,9 +151,9 @@ pub fn build(
   map
 }
 
-pub fn py_function_toml_string_to_py_object(val: &toml::Value) -> pyo3::PyObject {
+pub fn toml_py_function_qualname_to_py_object(val: &toml::Value) -> pyo3::PyObject {
   let qualname = val.as_str().expect("Boundry condition must be stringified python function").to_owned();
-  let (path_module, fname) = qualname.split_once(".").unwrap();
+  let (path_module, fname) = qualname.rsplit_once(".").unwrap();
   pyo3::prepare_freethreaded_python();
   pyo3::Python::with_gil(|py| {
     let importlib = pyo3::types::PyModule::import(py, "importlib.util").unwrap();
@@ -203,17 +203,19 @@ where
 pub fn get_py_function_source(f: &PyObject) -> Option<String> {
   pyo3::prepare_freethreaded_python();
   Python::with_gil(|py| {
-    Some(
-      PyModule::import(py, "inspect")
+    Some({
+      let source = PyModule::import(py, "inspect").ok()?.getattr("getsource").ok()?.call1((f,)).ok()?;
+
+      PyModule::import(py, "textwrap")
         .ok()?
-        .getattr("getsource")
+        .getattr("dedent")
         .ok()?
-        .call1((f,))
+        .call1((source,))
         .ok()?
         .downcast::<pyo3::types::PyString>()
         .ok()?
-        .to_string(),
-    )
+        .to_string()
+    })
   })
 }
 

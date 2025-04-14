@@ -159,6 +159,7 @@ pub struct GPeParameters {
 impl ModelDescription for STNParameters {
   const TYPE: &'static str = "STN";
   const EXPERIMENT_FILE_NAME: &'static str = EXPERIMENT_PARAMETER_FILE_NAME;
+  const DEFAULT_PATH: Option<&'static str> = Some(DEFAULT_PARAMETER_PATH);
 }
 
 impl Parameters for STNParameters {
@@ -170,11 +171,12 @@ impl Parameters for STNParameters {
 impl ModelDescription for GPeParameters {
   const TYPE: &'static str = "GPe";
   const EXPERIMENT_FILE_NAME: &'static str = EXPERIMENT_PARAMETER_FILE_NAME;
+  const DEFAULT_PATH: Option<&'static str> = Some(DEFAULT_PARAMETER_PATH);
 }
 
 impl Parameters for GPeParameters {}
 
-pub const DEFAULT_PATH: &'static str = "src/DEFAULT.toml";
+pub const DEFAULT_PARAMETER_PATH: &'static str = "src/DEFAULT.toml";
 pub const EXPERIMENTS_PATH: &'static str = "experiments";
 pub const EXPERIMENT_PARAMETER_FILE_NAME: &'static str = "PARAMETERS.toml";
 pub const EXPERIMENT_BC_FILE_NAME: &'static str = "BOUNDRY.toml";
@@ -182,6 +184,7 @@ pub const EXPERIMENT_BC_FILE_NAME: &'static str = "BOUNDRY.toml";
 pub trait ModelDescription {
   const TYPE: &'static str;
   const EXPERIMENT_FILE_NAME: &'static str;
+  const DEFAULT_PATH: Option<&'static str>;
 
   fn build_map(
     use_default: bool,
@@ -190,9 +193,9 @@ pub trait ModelDescription {
   ) -> toml::value::Table {
     let mut s = String::new();
     let map = build(
-      use_default,
+      if use_default { Self::DEFAULT_PATH } else { None },
       experiment.map(|(p, v)| {
-        s = format!("{p}/{EXPERIMENT_PARAMETER_FILE_NAME}");
+        s = format!("{p}/{}", Self::EXPERIMENT_FILE_NAME);
         (s.as_str(), v)
       }),
       custom_map,

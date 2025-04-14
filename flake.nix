@@ -20,6 +20,7 @@
           matplotlib
           numba
           tqdm
+          marimo
         ];
 
         shellHook = ''

@@ -9,7 +9,6 @@ def plot_time_activity(xs, labels, dt, title=None, vmin=None, vmax=0, cmap="gray
 
   if vmin is None: vmin = min([x.min() for x in xs])
   if vmax is None: vmax = max([x.max() for x in xs])
-  cmap = "gray_r"
 
   for ax, x, label in zip(axs, xs, labels):
     im = ax.imshow(x.T, aspect='auto', cmap=cmap, interpolation='nearest', vmin=vmin, vmax=vmax)
