@@ -32,6 +32,7 @@ impl ModelDescription for STNPopulationBoundryConditions {
 impl STNPopulationBoundryConditions {
   pub fn to_toml(&self, i_ext_py_qualified_name: &str) -> toml::Value {
     let mut table = toml::value::Table::new();
+    table.insert("count".to_owned(), (self.count as i64).into());
     table.insert("v".to_owned(), self.v.to_vec().into());
     table.insert("n".to_owned(), self.n.to_vec().into());
     table.insert("h".to_owned(), self.h.to_vec().into());

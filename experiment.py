@@ -51,30 +51,10 @@ def _(cmap, df_episodic, plot_time_activity, rt_episodic):
 
 
 @app.cell
-def _(cbgt, np):
-    def wave():
-        gpe_count, stn_count = 10, 10
-        gpe_i_app = lambda t, n: -1.2
-
-        c_g_s = np.zeros((gpe_count, stn_count), dtype=np.float64)
-        c_s_g = np.zeros((stn_count, gpe_count), dtype=np.float64)
-        c_g_g = (~np.eye(gpe_count, dtype=np.bool)).astype(np.float64)
-
-        c_s_g[0, [0,1,-1]] = 1
-        for i in range(stn_count-1):
-            c_s_g[i+1] = np.roll(c_s_g[i], 1)
-
-        c_g_s[0, [0,1,2,-1,-2]] = 1
-        for i in range(gpe_count-1):
-            c_g_s[i+1] = np.roll(c_g_s[i], 1) 
-
-        rt = cbgt.RubinTerman(dt=0.01, total_t=2, stn_count=stn_count, gpe_count=gpe_count,
-                              gpe_i_app=gpe_i_app, experiment="wave_rt",
-                              stn_c_g_s=c_g_s, gpe_c_s_g=c_s_g, gpe_c_g_g=c_g_g)
-        return rt.run(), rt
-
-    df_wave, rt_wave = wave()
-    return df_wave, rt_wave, wave
+def _(cbgt):
+    rt_wave = cbgt.RubinTerman(dt=0.01, total_t=2, experiment="wave")
+    df_wave = rt_wave.run()
+    return df_wave, rt_wave
 
 
 @app.cell
@@ -85,30 +65,10 @@ def _(cmap, df_wave, plot_time_activity, rt_wave):
 
 
 @app.cell
-def _(cbgt, np):
-    def cluster():
-        gpe_count, stn_count = 8, 8
-        gpe_i_app = lambda t, n: -.6
-
-        c_g_s = np.zeros((gpe_count, stn_count), dtype=np.float64)
-        c_s_g = np.eye((stn_count), dtype=np.float64)
-        c_g_g = np.zeros((gpe_count, gpe_count), dtype=np.float64)
-
-        c_g_g[0, [1,-1]] = 1
-        for i in range(stn_count-1):
-            c_g_g[i+1] = np.roll(c_g_g[i], 1)
-
-        c_g_s[0, [2,-2]] = 1
-        for i in range(stn_count-1):
-            c_g_s[i+1] = np.roll(c_g_s[i], 1)
-
-        rt = cbgt.RubinTerman(dt=0.01, total_t=2, gpe_i_app=gpe_i_app, stn_count=stn_count, gpe_count=gpe_count,
-                              experiment="cluster",
-                              stn_c_g_s=c_g_s, gpe_c_s_g=c_s_g, gpe_c_g_g=c_g_g)
-        return rt.run(), rt
-
-    df_cluster, rt_cluster = cluster()
-    return cluster, df_cluster, rt_cluster
+def _(cbgt):
+    rt_cluster = cbgt.RubinTerman(dt=0.01, total_t=2, experiment="cluster")
+    df_cluster =  rt_cluster.run()
+    return df_cluster, rt_cluster
 
 
 @app.cell
