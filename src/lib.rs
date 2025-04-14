@@ -1,7 +1,9 @@
-use log::{debug, info};
-use ndarray::{Array2, ArrayView2};
+use log::{debug, info, warn};
+use ndarray::{s, Array2, ArrayView2};
 use numpy::IntoPyArray;
+use pyo3::types::IntoPyDict;
 use pyo3::{prelude::*, types::PyDict};
+// use serde_pickle as pickle;
 use struct_field_names_as_array::FieldNamesAsArray;
 
 use std::io::Write;
@@ -80,7 +82,7 @@ impl RubinTerman {
 }
 
 impl RubinTerman {
-  pub fn _run(&mut self) -> HashMap<&str, HashMap<&str, Array2<f64>>> {
+  pub fn _run(&mut self, output_dt: Option<f64>) -> HashMap<&str, HashMap<&str, Array2<f64>>> {
     let num_timesteps: usize = (self.total_t * 1e3 / self.dt) as usize;
 
     debug!("Computing {} timesteps", format_number(num_timesteps));
@@ -137,33 +139,47 @@ impl RubinTerman {
       start.elapsed().as_secs_f64() / self.total_t * 1e3
     );
 
+    let output_dt = output_dt.unwrap_or(1.0); // ms
+    let skip = output_dt / self.dt;
+    if skip != skip.trunc() {
+      warn!(
+        "output_dt / simulation_dt = {skip} is not integer. With a step of {} => output_dt = {}",
+        skip.trunc(),
+        skip.trunc() * self.dt
+      );
+    }
+    let skip = skip.trunc() as usize;
+    let output_dt = skip as f64 * self.dt;
+
     #[rustfmt::skip]
     let combined = HashMap::<&str, HashMap<&str, Array2<f64>>>::from([
       ("stn", HashMap::from([
-				("v", stn.v), 
-				("i_l", stn.i_l), 
-				("i_k", stn.i_k), 
-				("i_na", stn.i_na), 
-				("i_t", stn.i_t), 
-				("i_ca", stn.i_ca), 
-				("i_ahp", stn.i_ahp), 
-				("i_g_s", stn.i_g_s), 
-				("i_ext", stn.i_ext), 
-				("s", stn.s), 
+        ("time", ndarray::Array1::range(0., self.total_t, output_dt).to_shape((num_timesteps,1)).unwrap().to_owned()), 
+				("v", stn.v.slice(s![0..;skip, ..]).to_owned()), 
+				("i_l", stn.i_l.slice(s![0..;skip, ..]).to_owned()), 
+				("i_k", stn.i_k.slice(s![0..;skip, ..]).to_owned()), 
+				("i_na", stn.i_na.slice(s![0..;skip, ..]).to_owned()), 
+				("i_t", stn.i_t.slice(s![0..;skip, ..]).to_owned()), 
+				("i_ca", stn.i_ca.slice(s![0..;skip, ..]).to_owned()), 
+				("i_ahp", stn.i_ahp.slice(s![0..;skip, ..]).to_owned()), 
+				("i_g_s", stn.i_g_s.slice(s![0..;skip, ..]).to_owned()), 
+				("i_ext", stn.i_ext.slice(s![0..;skip, ..]).to_owned()), 
+				("s", stn.s.slice(s![0..;skip, ..]).to_owned()), 
 			])),
       ("gpe", HashMap::from([
-				("v", gpe.v), 
-				("i_l", gpe.i_l), 
-				("i_k", gpe.i_k), 
-				("i_na", gpe.i_na), 
-				("i_t", gpe.i_t), 
-				("i_ca", gpe.i_ca), 
-				("i_ahp", gpe.i_ahp), 
-				("i_ext", gpe.i_ext), 
-				("i_app", gpe.i_app), 
-				("i_s_g", gpe.i_s_g), 
-				("i_g_g", gpe.i_g_g), 
-				("s", gpe.s), 
+        ("time", ndarray::Array1::range(0., self.total_t, output_dt).to_shape((num_timesteps,1)).unwrap().to_owned()), 
+				("v", gpe.v.slice(s![0..;skip, ..]).to_owned()), 
+				("i_l", gpe.i_l.slice(s![0..;skip, ..]).to_owned()), 
+				("i_k", gpe.i_k.slice(s![0..;skip, ..]).to_owned()), 
+				("i_na", gpe.i_na.slice(s![0..;skip, ..]).to_owned()), 
+				("i_t", gpe.i_t.slice(s![0..;skip, ..]).to_owned()), 
+				("i_ca", gpe.i_ca.slice(s![0..;skip, ..]).to_owned()), 
+				("i_ahp", gpe.i_ahp.slice(s![0..;skip, ..]).to_owned()), 
+				("i_ext", gpe.i_ext.slice(s![0..;skip, ..]).to_owned()), 
+				("i_app", gpe.i_app.slice(s![0..;skip, ..]).to_owned()), 
+				("i_s_g", gpe.i_s_g.slice(s![0..;skip, ..]).to_owned()), 
+				("i_g_g", gpe.i_g_g.slice(s![0..;skip, ..]).to_owned()), 
+				("s", gpe.s.slice(s![0..;skip, ..]).to_owned()), 
 			])),
     ]);
 
@@ -364,7 +380,6 @@ impl RubinTerman {
     }
 
     let stn_population = STNPopulation::new(num_timesteps, stn_count, gpe_count).with_bcs(stn_bcs);
-
     let gpe_population = GPePopulation::new(num_timesteps, stn_count, gpe_count).with_bcs(gpe_bcs);
 
     if save_dir.is_none() {
@@ -374,9 +389,10 @@ impl RubinTerman {
     Self { dt, total_t, stn_population, stn_parameters, gpe_population, gpe_parameters }
   }
 
-  fn run(&mut self, py: Python) -> Py<PyDict> {
-    let res = self._run();
-    to_python_dict(py, res)
+  #[pyo3(signature = (output_dt=None))]
+  fn run(&mut self, py: Python, output_dt: Option<f64>) -> Py<PyDict> {
+    let res = self._run(output_dt);
+    to_py_dict_of_dataframes(py, res)
   }
 
   #[staticmethod]
@@ -396,20 +412,43 @@ fn get_py_function_source_and_name(f: &PyObject) -> Option<(String, String)> {
   Some((src, name))
 }
 
-fn to_python_dict<'py>(py: Python, rust_map: HashMap<&str, HashMap<&str, Array2<f64>>>) -> Py<PyDict> {
-  let py_dict = PyDict::new(py);
+fn to_py_dict_of_dataframes<'py>(py: Python<'py>, rust_map: HashMap<&str, HashMap<&str, Array2<f64>>>) -> Py<PyDict> {
+  // Maybe it would be nicer to just write to a csv file and use pd.read_csv from the python side,
+  // would be slower but idunno
+  // ORR maybe i can just use the gil to write the csv from the rust side, but that seems kinda
+  // silly
+  let pd = py.import("pandas").expect("pandas not found");
+  let result_dict = PyDict::new(py);
 
-  for (key1, sub_map) in rust_map {
-    let sub_dict = PyDict::new(py);
+  for (group, submap) in rust_map {
+    let mut columns: HashMap<&str, PyObject> = HashMap::new();
 
-    for (key2, array) in sub_map {
-      sub_dict.set_item(key2, array.into_pyarray(py)).unwrap();
+    for (var_name, array) in submap {
+      let array_view = array.view();
+
+      if array_view.shape()[1] == 1 {
+        // Flatten 2D column vector into 1D
+        let col = array_view.column(0).to_owned();
+        columns.insert(var_name, col.into_pyarray(py).into());
+      } else {
+        columns.insert(
+          var_name,
+          array
+            .outer_iter()
+            .map(|row| row.to_owned().into_pyarray(py).into())
+            .collect::<Vec<PyObject>>()
+            .into_pyarray(py)
+            .into(),
+        );
+      }
     }
+    let data_dict: Bound<'_, PyDict> = columns.into_py_dict(py).unwrap();
+    let df = pd.getattr("DataFrame").unwrap().call1((data_dict,)).unwrap();
 
-    py_dict.set_item(key1, sub_dict).unwrap();
+    result_dict.set_item(group, df).unwrap();
   }
 
-  py_dict.into()
+  result_dict.into()
 }
 
 #[pymodule]

@@ -3,6 +3,7 @@ import numpy as np
 
 
 def plot_time_activity(xs, labels, dt, title=None, vmin=None, vmax=0, cmap="gray_r", file=None):
+  xs = [np.stack(x) for x in xs]
   assert len(xs) != 0
   num_neurons = sum([x.shape[1] for x in xs])
   fig, axs = plt.subplots(len(xs), 1, sharex=True, figsize=(8, num_neurons * 0.3))
@@ -31,7 +32,8 @@ def plot_time_activity(xs, labels, dt, title=None, vmin=None, vmax=0, cmap="gray
   plt.show()
 
 
-def plot_voltage_trace(xs, labels, dt, title=None, file=None):
+def plot_voltage_trace(xs, labels, dt, title=None, file=None, color="k"):
+  xs = [np.stack(x) for x in xs]
   max_num_neurons = max([x.shape[1] for x in xs])
   fig, axs = plt.subplots(max_num_neurons,
                           len(xs),
@@ -43,7 +45,7 @@ def plot_voltage_trace(xs, labels, dt, title=None, file=None):
 
   for axcol, x, label in zip(axs.T, xs, labels):
     for i, (trace, ax) in enumerate(zip(x.T, axcol)):
-      ax.plot(trace, 'k', lw=1)
+      ax.plot(trace, color=color, lw=1)
       ax.set_yticks([])
       ax.set_ylabel(f"{label} {i+1}", rotation=0, labelpad=10)
       ax.yaxis.set_label_coords(-0.07, 0.3)
