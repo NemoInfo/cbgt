@@ -244,3 +244,20 @@ pub fn parse_toml_value(k: &str, v: &str) -> toml::Value {
     }
   }
 }
+
+pub fn array2_to_polars_column(name: &str, array: ndarray::ArrayView2<f64>) -> polars::prelude::Column {
+  use polars::prelude::*;
+  if array.ncols() == 1 {
+    return Float64Chunked::from_vec(name.into(), array.column(0).to_vec()).into_column();
+  }
+
+  let mut chunked_builder =
+    ListPrimitiveChunkedBuilder::<Float64Type>::new(name.into(), array.nrows(), array.ncols(), DataType::Float64);
+  for row in array.axis_iter(ndarray::Axis(0)) {
+    match row.as_slice() {
+      Some(row) => chunked_builder.append_slice(row),
+      None => chunked_builder.append_slice(&row.to_vec()),
+    }
+  }
+  chunked_builder.finish().into_column()
+}

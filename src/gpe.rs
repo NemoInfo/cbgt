@@ -220,4 +220,43 @@ impl GPePopulation {
     let h_syn_inf = x_inf(&(v - gpe.tht_g).view(), gpe.tht_g_h, gpe.sig_g_h);
     s1.assign(&(s + dt * (gpe.alpha * h_syn_inf * (1. - s) - gpe.beta * s)));
   }
+
+  pub fn into_compressed_polars_df(&self, idt: f64, odt: Option<f64>) -> polars::prelude::DataFrame {
+    let num_timesteps = self.v.nrows();
+    let odt = odt.unwrap_or(1.); // ms
+    let step = odt / idt;
+    if step != step.trunc() {
+      log::warn!(
+        "output_dt / simulation_dt = {step} is not integer. With a step of {} => output_dt = {}",
+        step.trunc(),
+        step.trunc() * idt
+      );
+    }
+    let step = step.trunc() as usize;
+    let output_dt = step as f64 * idt;
+    let srange = s![0..num_timesteps;step, ..];
+
+    let num_timesteps = self.v.slice(srange).nrows();
+
+    let time = (ndarray::Array1::range(0., num_timesteps as f64, 1.) * output_dt)
+      .to_shape((num_timesteps, 1))
+      .unwrap()
+      .to_owned();
+
+    polars::prelude::DataFrame::new(vec![
+      array2_to_polars_column("time", time.view()),
+      array2_to_polars_column("v", self.v.slice(srange)),
+      array2_to_polars_column("i_l", self.i_l.slice(srange)),
+      array2_to_polars_column("i_k", self.i_k.slice(srange)),
+      array2_to_polars_column("i_na", self.i_na.slice(srange)),
+      array2_to_polars_column("i_t", self.i_t.slice(srange)),
+      array2_to_polars_column("i_ca", self.i_ca.slice(srange)),
+      array2_to_polars_column("i_ahp", self.i_ahp.slice(srange)),
+      array2_to_polars_column("i_g_g", self.i_g_g.slice(srange)),
+      array2_to_polars_column("i_s_g", self.i_s_g.slice(srange)),
+      array2_to_polars_column("i_ext", self.i_ext.slice(srange)),
+      array2_to_polars_column("s", self.s.slice(srange)),
+    ])
+    .expect("This shouldn't happend if the struct is valid")
+  }
 }

@@ -1,16 +1,20 @@
 import matplotlib.pyplot as plt
 import numpy as np
+from typing import Any
 
 
-def plot_time_activity(xs, labels, dt, title=None, vmin=None, vmax=0, cmap="gray_r", file=None):
-  xs = [np.stack(x) for x in xs]
-  assert len(xs) != 0
+def plot_time_activity(dfs, labels, title=None, vmin=None, vmax=0, cmap="gray_r", file=None, y="v"):
+  assert len(dfs) != 0
+  dt = dfs[0]["time"][1]
+  xs = [np.stack(df[y]) for df in dfs]
   num_neurons = sum([x.shape[1] for x in xs])
+
   fig, axs = plt.subplots(len(xs), 1, sharex=True, figsize=(8, num_neurons * 0.3))
 
   if vmin is None: vmin = min([x.min() for x in xs])
   if vmax is None: vmax = max([x.max() for x in xs])
 
+  im: Any = None
   for ax, x, label in zip(axs, xs, labels):
     im = ax.imshow(x.T, aspect='auto', cmap=cmap, interpolation='nearest', vmin=vmin, vmax=vmax)
     ax.set_yticks([0, x.shape[1] - 1])
@@ -32,8 +36,9 @@ def plot_time_activity(xs, labels, dt, title=None, vmin=None, vmax=0, cmap="gray
   plt.show()
 
 
-def plot_voltage_trace(xs, labels, dt, title=None, file=None, color="k"):
-  xs = [np.stack(x) for x in xs]
+def plot_time_trace(dfs, labels, title=None, file=None, color="k", y="v"):
+  dt = dfs[0]["time"][1]
+  xs = [np.stack(df[y]) for df in dfs]
   max_num_neurons = max([x.shape[1] for x in xs])
   fig, axs = plt.subplots(max_num_neurons,
                           len(xs),

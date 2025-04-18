@@ -1,12 +1,9 @@
-use log::{debug, info, warn};
-use ndarray::{s, Array2, ArrayView2};
-use numpy::IntoPyArray;
-use pyo3::types::IntoPyDict;
+use log::{debug, info};
 use pyo3::{prelude::*, types::PyDict};
-// use serde_pickle as pickle;
 use struct_field_names_as_array::FieldNamesAsArray;
 
 use std::io::Write;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
 use std::{collections::HashMap, thread};
@@ -23,9 +20,8 @@ use gpe::{GPePopulation, GPePopulationBoundryConditions};
 mod util;
 use util::*;
 
-/// Rubin Terman model using Euler's method
-#[allow(unused)]
 #[pyclass]
+/// Rubin Terman model using Euler's method
 pub struct RubinTerman {
   /// Time between Euler steps (ms)
   #[pyo3(get)]
@@ -79,10 +75,8 @@ impl RubinTerman {
       gpe_parameters: GPeParameters::build(use_default, experiment, custom_gpe),
     }
   }
-}
 
-impl RubinTerman {
-  pub fn _run(&mut self, output_dt: Option<f64>) -> HashMap<&str, HashMap<&str, Array2<f64>>> {
+  pub fn run(&mut self) {
     let num_timesteps: usize = (self.total_t * 1e3 / self.dt) as usize;
 
     debug!("Computing {} timesteps", format_number(num_timesteps));
@@ -104,8 +98,8 @@ impl RubinTerman {
     // Hacky way to keep a view of the synapse in the other thread.
     // This is okay as long as nuclei state integration is time-synchronised between threads.
     // Since euler_step only modifies _.s.row(it + 1) we can safely read _.s.row(it) at the same time
-    let gpe_s = unsafe { ArrayView2::from_shape_ptr(gpe.s.raw_dim(), gpe.s.as_ptr()) };
-    let stn_s = unsafe { ArrayView2::from_shape_ptr(stn.s.raw_dim(), stn.s.as_ptr()) };
+    let gpe_s = unsafe { ndarray::ArrayView2::from_shape_ptr(gpe.s.raw_dim(), gpe.s.as_ptr()) };
+    let stn_s = unsafe { ndarray::ArrayView2::from_shape_ptr(stn.s.raw_dim(), stn.s.as_ptr()) };
 
     let start = Instant::now();
     let barrier = spin_barrier.clone();
@@ -130,69 +124,30 @@ impl RubinTerman {
       gpe
     });
 
-    let stn = stn_thread.join().expect("STN thread panicked!");
-    let gpe = gpe_thread.join().expect("GPe thread panicked!");
+    self.stn_population = stn_thread.join().expect("STN thread panicked!");
+    self.gpe_population = gpe_thread.join().expect("GPe thread panicked!");
 
     info!(
       "Total real time: {:.2}s at {:.0} ms/sim_s",
       start.elapsed().as_secs_f64(),
       start.elapsed().as_secs_f64() / self.total_t * 1e3
     );
+  }
 
-    let output_dt = output_dt.unwrap_or(1.0); // ms
-    let skip = output_dt / self.dt;
-    if skip != skip.trunc() {
-      warn!(
-        "output_dt / simulation_dt = {skip} is not integer. With a step of {} => output_dt = {}",
-        skip.trunc(),
-        skip.trunc() * self.dt
-      );
-    }
-    let skip = skip.trunc() as usize;
-    let output_dt = skip as f64 * self.dt;
+  pub fn into_map_polars_dataframe(self, output_dt: Option<f64>) {
+    let stn = self.stn_population.into_compressed_polars_df(self.dt, output_dt);
+    let gpe = self.gpe_population.into_compressed_polars_df(self.dt, output_dt);
 
-    #[rustfmt::skip]
-    let combined = HashMap::<&str, HashMap<&str, Array2<f64>>>::from([
-      ("stn", HashMap::from([
-        ("time", ndarray::Array1::range(0., self.total_t, output_dt).to_shape((num_timesteps,1)).unwrap().to_owned()), 
-				("v", stn.v.slice(s![0..;skip, ..]).to_owned()), 
-				("i_l", stn.i_l.slice(s![0..;skip, ..]).to_owned()), 
-				("i_k", stn.i_k.slice(s![0..;skip, ..]).to_owned()), 
-				("i_na", stn.i_na.slice(s![0..;skip, ..]).to_owned()), 
-				("i_t", stn.i_t.slice(s![0..;skip, ..]).to_owned()), 
-				("i_ca", stn.i_ca.slice(s![0..;skip, ..]).to_owned()), 
-				("i_ahp", stn.i_ahp.slice(s![0..;skip, ..]).to_owned()), 
-				("i_g_s", stn.i_g_s.slice(s![0..;skip, ..]).to_owned()), 
-				("i_ext", stn.i_ext.slice(s![0..;skip, ..]).to_owned()), 
-				("s", stn.s.slice(s![0..;skip, ..]).to_owned()), 
-			])),
-      ("gpe", HashMap::from([
-        ("time", ndarray::Array1::range(0., self.total_t, output_dt).to_shape((num_timesteps,1)).unwrap().to_owned()), 
-				("v", gpe.v.slice(s![0..;skip, ..]).to_owned()), 
-				("i_l", gpe.i_l.slice(s![0..;skip, ..]).to_owned()), 
-				("i_k", gpe.i_k.slice(s![0..;skip, ..]).to_owned()), 
-				("i_na", gpe.i_na.slice(s![0..;skip, ..]).to_owned()), 
-				("i_t", gpe.i_t.slice(s![0..;skip, ..]).to_owned()), 
-				("i_ca", gpe.i_ca.slice(s![0..;skip, ..]).to_owned()), 
-				("i_ahp", gpe.i_ahp.slice(s![0..;skip, ..]).to_owned()), 
-				("i_ext", gpe.i_ext.slice(s![0..;skip, ..]).to_owned()), 
-				("i_app", gpe.i_app.slice(s![0..;skip, ..]).to_owned()), 
-				("i_s_g", gpe.i_s_g.slice(s![0..;skip, ..]).to_owned()), 
-				("i_g_g", gpe.i_g_g.slice(s![0..;skip, ..]).to_owned()), 
-				("s", gpe.s.slice(s![0..;skip, ..]).to_owned()), 
-			])),
-    ]);
-
-    combined
+    let _: HashMap<&str, polars::prelude::DataFrame> = HashMap::from_iter([("stn", stn), ("gpe", gpe)]);
   }
 }
 
 #[pymethods]
 impl RubinTerman {
+  #[new]
   #[pyo3(signature=(dt=0.01, total_t=2., experiment=None, experiment_version=None, 
                     parameters_file=None, boundry_ic_file=None, use_default=true,
                     stn_i_ext=None, gpe_i_ext=None, gpe_i_app=None, save_dir=Some("/tmp/cbgt_last_model".to_owned()), **kwds))]
-  #[new]
   fn new_py(
     dt: f64,
     total_t: f64,
@@ -389,10 +344,43 @@ impl RubinTerman {
     Self { dt, total_t, stn_population, stn_parameters, gpe_population, gpe_parameters }
   }
 
-  #[pyo3(signature = (output_dt=None))]
-  fn run(&mut self, py: Python, output_dt: Option<f64>) -> Py<PyDict> {
-    let res = self._run(output_dt);
-    to_py_dict_of_dataframes(py, res)
+  #[pyo3(name = "run")]
+  fn run_py(&mut self) {
+    self.run();
+  }
+
+  #[pyo3(name="to_polars", signature = (dt=None))]
+  fn into_map_polars_dataframe_py(&self, py: Python, dt: Option<f64>) -> Py<PyDict> {
+    let stn = self.stn_population.into_compressed_polars_df(self.dt, dt);
+    let gpe = self.gpe_population.into_compressed_polars_df(self.dt, dt);
+
+    let dict = PyDict::new(py);
+    dict.set_item("stn", pyo3_polars::PyDataFrame(stn)).expect("Could not add insert STN Polars DataFrame");
+    dict.set_item("gpe", pyo3_polars::PyDataFrame(gpe)).expect("Could not add insert STN Polars DataFrame");
+
+    dict.into()
+  }
+
+  #[pyo3(signature = (dir, dt=None))]
+  fn save_to_parquet_files(&self, dir: &str, dt: Option<f64>) -> PyResult<()> {
+    let dir = std::path::PathBuf::from_str(dir)?;
+    std::fs::create_dir_all(&dir)?;
+
+    let mut stn = self.stn_population.into_compressed_polars_df(self.dt, dt);
+    let mut gpe = self.gpe_population.into_compressed_polars_df(self.dt, dt);
+
+    let write_parquet = |name: &str, df: &mut polars::prelude::DataFrame| {
+      let file_path = dir.join(name);
+      let file = std::fs::File::create(&file_path).expect("Could not creare output file");
+      let writer = polars::prelude::ParquetWriter::new(&file);
+      writer.set_parallel(true).finish(df).expect("Could not write to output file");
+      file_path
+    };
+
+    write_parquet("stn.parquet", &mut stn);
+    write_parquet("gpe.parquet", &mut gpe);
+
+    Ok(())
   }
 
   #[staticmethod]
@@ -410,45 +398,6 @@ fn get_py_function_source_and_name(f: &PyObject) -> Option<(String, String)> {
   }
 
   Some((src, name))
-}
-
-fn to_py_dict_of_dataframes<'py>(py: Python<'py>, rust_map: HashMap<&str, HashMap<&str, Array2<f64>>>) -> Py<PyDict> {
-  // Maybe it would be nicer to just write to a csv file and use pd.read_csv from the python side,
-  // would be slower but idunno
-  // ORR maybe i can just use the gil to write the csv from the rust side, but that seems kinda
-  // silly
-  let pd = py.import("pandas").expect("pandas not found");
-  let result_dict = PyDict::new(py);
-
-  for (group, submap) in rust_map {
-    let mut columns: HashMap<&str, PyObject> = HashMap::new();
-
-    for (var_name, array) in submap {
-      let array_view = array.view();
-
-      if array_view.shape()[1] == 1 {
-        // Flatten 2D column vector into 1D
-        let col = array_view.column(0).to_owned();
-        columns.insert(var_name, col.into_pyarray(py).into());
-      } else {
-        columns.insert(
-          var_name,
-          array
-            .outer_iter()
-            .map(|row| row.to_owned().into_pyarray(py).into())
-            .collect::<Vec<PyObject>>()
-            .into_pyarray(py)
-            .into(),
-        );
-      }
-    }
-    let data_dict: Bound<'_, PyDict> = columns.into_py_dict(py).unwrap();
-    let df = pd.getattr("DataFrame").unwrap().call1((data_dict,)).unwrap();
-
-    result_dict.set_item(group, df).unwrap();
-  }
-
-  result_dict.into()
 }
 
 #[pymodule]
@@ -496,12 +445,5 @@ mod rubin_terman {
     let a = vectorize_i_ext(|t, _| if t < 500. { 6.9 } else { 9.6 }, 0.1, 1., 5);
     assert_eq!(a[[0, 0]], 6.9);
     assert_eq!(a[[a.shape()[0] - 1, 0]], 9.6);
-  }
-
-  #[test]
-  fn test_load_ics() {
-    let rt = RubinTerman::new(10, 10, 0.02, 2., true, None, None);
-    dbg!(rt.stn_population.v.row(0));
-    assert!(false);
   }
 }

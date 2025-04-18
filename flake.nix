@@ -21,6 +21,11 @@
           numba
           tqdm
           marimo
+          polars
+          altair
+
+          (pkgs.rustc) # Rust compiler
+          (pkgs.cargo) # Rust dependecy manager
         ];
 
         shellHook = ''
