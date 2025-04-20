@@ -2,7 +2,6 @@ use log::{debug, info};
 use pyo3::{prelude::*, types::PyDict};
 use struct_field_names_as_array::FieldNamesAsSlice;
 
-use std::io::Write;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
@@ -39,49 +38,33 @@ pub struct RubinTerman {
 }
 
 impl RubinTerman {
+  #[allow(unused)]
   pub fn new(
-    stn_count: usize,
-    gpe_count: usize,
     dt: f64,
     total_t: f64,
-    use_default: bool,
     experiment: Option<(&str, Option<&str>)>,
-    custom_file: Option<&str>,
+    parameters_file: Option<&str>,
+    boundry_ic_file: Option<&str>,
+    use_default: bool,
+    save_dir: Option<String>,
   ) -> Self {
-    todo!()
-    //   let num_timesteps: usize = (total_t * 1e3 / dt) as usize;
-    //
-    //   let custom_stn = custom_file.map(|f| read_map_from_toml(f, None, "STN"));
-    //   let custom_gpe = custom_file.map(|f| read_map_from_toml(f, None, "GPe"));
-    //
-    //   let stn_bcs = STNPopulationBoundryConditions::from(
-    //     STNPopulationBoundryConditions::build_map(use_default, experiment, custom_stn.clone()),
-    //     stn_count,
-    //     gpe_count,
-    //     dt,
-    //     total_t,
-    //   );
-    //
-    //   let gpe_bcs = GPePopulationBoundryConditions::from(
-    //     GPePopulationBoundryConditions::build_map(use_default, experiment, custom_gpe.clone()),
-    //     gpe_count,
-    //     stn_count,
-    //     dt,
-    //     total_t,
-    //   );
-    //
-    //   Self {
-    //     dt,
-    //     total_t,
-    //     stn_population: STNPopulation::new(num_timesteps, stn_count, gpe_count).with_bcs(stn_bcs),
-    //     stn_parameters: STNParameters::build(use_default, experiment, custom_stn),
-    //     gpe_population: GPePopulation::new(num_timesteps, gpe_count, stn_count).with_bcs(gpe_bcs),
-    //     gpe_parameters: GPeParameters::build(use_default, experiment, custom_gpe),
-    //   }
+    let (experiment, experiment_version) = experiment.map_or((None, None), |(e, v)| (Some(e), v));
+
+    Self::new_py(
+      dt,
+      total_t,
+      experiment,
+      experiment_version,
+      parameters_file,
+      boundry_ic_file,
+      use_default,
+      save_dir,
+      None,
+    )
   }
 
   pub fn run(&mut self) {
-    let num_timesteps: usize = (self.total_t * 1e3 / self.dt) as usize;
+    let num_timesteps: usize = (self.total_t / self.dt) as usize;
 
     debug!("Computing {} timesteps", format_number(num_timesteps));
 
@@ -134,7 +117,7 @@ impl RubinTerman {
     info!(
       "Total real time: {:.2}s at {:.0} ms/sim_s",
       start.elapsed().as_secs_f64(),
-      start.elapsed().as_secs_f64() / self.total_t * 1e3
+      start.elapsed().as_secs_f64() / self.total_t
     );
   }
 
@@ -186,7 +169,7 @@ where
         return true;
       } else if BoundaryBuilder::FIELD_NAMES_AS_SLICE.contains(&key) {
         let kv = self.parse_toml_callable_py(key, value);
-        self.par_map.extend(kv);
+        self.bcs_map.extend(kv);
         return true;
       }
     }
@@ -225,7 +208,7 @@ impl RubinTerman {
                     save_dir=Some("/tmp/cbgt_last_model".to_owned()), **kwds))]
   fn new_py(
     dt: f64,
-    total_t: f64,
+    mut total_t: f64,
     experiment: Option<&str>,
     experiment_version: Option<&str>,
     parameters_file: Option<&str>,
@@ -234,6 +217,7 @@ impl RubinTerman {
     save_dir: Option<String>, // Maybe add datetime to temp save
     kwds: Option<&Bound<'_, PyDict>>,
   ) -> Self {
+    total_t *= 1e3;
     assert!(experiment.is_some() || experiment_version.is_none(), "Experiment version requires experiment");
 
     if let Some(save_dir) = &save_dir {
@@ -253,46 +237,42 @@ impl RubinTerman {
       }
     }
 
-    let mut pyf_src = HashMap::new();
+    let mut pyf_src = HashMap::from_iter(match Boundary::DEFAULT {
+      Some((qname, src)) => vec![(qname.into(), src.into())],
+      None => vec![],
+    });
     let (stn_kw_params, stn_kw_bcs) = stn_kw_config.into_maps(&mut pyf_src);
     let (gpe_kw_params, gpe_kw_bcs) = gpe_kw_config.into_maps(&mut pyf_src);
 
     let stn_parameters = BuilderSTNParameters::build(stn_kw_params, parameters_file, experiment, use_default).finish();
     let gpe_parameters = BuilderGPeParameters::build(gpe_kw_params, parameters_file, experiment, use_default).finish();
 
+    log::debug!("{:?}", stn_kw_bcs);
     let stn_bcs_builder = BuilderSTNBoundary::build(stn_kw_bcs, boundry_ic_file, experiment, use_default);
     let gpe_bcs_builder = BuilderGPeBoundary::build(gpe_kw_bcs, boundry_ic_file, experiment, use_default);
 
+    log::debug!("{:?}", stn_bcs_builder);
     let stn_count = stn_bcs_builder.get_count().expect("stn_count not found");
     let gpe_count = gpe_bcs_builder.get_count().expect("gpe_count not found");
 
     stn_bcs_builder.extends_pyf_src(&mut pyf_src);
     gpe_bcs_builder.extends_pyf_src(&mut pyf_src);
 
+    let stn_qual_names = stn_bcs_builder.get_callable_qnames();
+    let gpe_qual_names = gpe_bcs_builder.get_callable_qnames();
     let pyf_file = write_temp_pyf_file(pyf_src);
 
-    let num_timesteps: usize = (total_t * 1e3 / dt) as usize;
-
+    let num_timesteps: usize = (total_t / dt) as usize;
     let stn_bcs = stn_bcs_builder.finish(stn_count, gpe_count, dt, total_t);
     let gpe_bcs = gpe_bcs_builder.finish(gpe_count, stn_count, dt, total_t);
 
-    let stn_population = STNPopulation::new(num_timesteps, stn_count, gpe_count).with_bcs(stn_bcs);
-    let gpe_population = GPePopulation::new(num_timesteps, stn_count, gpe_count).with_bcs(gpe_bcs);
-
     if let Some(save_dir) = &save_dir {
       write_parameter_file(&stn_parameters, &gpe_parameters, save_dir);
-
-      //     TODO
-      //     let bc_map = toml::value::Table::from_iter([
-      //       ("STN".to_owned(), stn_bcs.to_toml(&stn_i_ext_qualname)),
-      //       ("GPe".to_owned(), gpe_bcs.to_toml(&gpe_i_ext_qualname, &gpe_i_app_qualname)),
-      //     ]);
-      //
-      //     let file_path: std::path::PathBuf = format!("{save_dir}/{EXPERIMENT_BC_FILE_NAME}").into();
-      //     let mut file = std::fs::File::create(&file_path).unwrap();
-      //     write!(file, "{}", toml::Value::Table(bc_map)).unwrap();
-      //     info!("Saved parameters at [{}]", file_path.canonicalize().unwrap().display());
+      write_boundary_file(&stn_bcs, &gpe_bcs, save_dir, &stn_qual_names, &gpe_qual_names);
     }
+
+    let stn_population = STNPopulation::new(num_timesteps, stn_count, gpe_count).with_bcs(stn_bcs);
+    let gpe_population = GPePopulation::new(num_timesteps, stn_count, gpe_count).with_bcs(gpe_bcs);
 
     std::fs::remove_file(pyf_file).expect("File was just created, it should exist.");
 
@@ -345,16 +325,6 @@ impl RubinTerman {
   }
 }
 
-fn get_py_function_source_and_name(f: &PyObject) -> Option<(String, String)> {
-  let src = get_py_function_source(&f)?;
-  let mut name = get_py_object_name(&f)?;
-  if name == "<lambda>" {
-    name = src.split_once('=').unwrap().0.trim().to_owned();
-  }
-
-  Some((src, name))
-}
-
 #[pymodule]
 fn cbgt(m: &Bound<'_, PyModule>) -> PyResult<()> {
   m.add_class::<RubinTerman>()?;
@@ -371,7 +341,7 @@ mod rubin_terman {
   fn test_vectorize_i_ext_py() {
     pyo3::prepare_freethreaded_python();
     let dt = 0.01;
-    let total_t = 1.;
+    let total_t = 1. * 1e3;
     let num_neurons = 5;
     let a = vectorize_i_ext_py(
       &Python::with_gil(|py| py.eval(c_str!("lambda t, n: 6.9 if t < 500 else 9.6"), None, None).unwrap().into()),
@@ -394,10 +364,10 @@ mod rubin_terman {
 
   #[test]
   fn test_vectorize_i_ext_rust() {
-    let a = vectorize_i_ext(|t, _| if t < 500. { 6.9 } else { 9.6 }, 0.01, 1., 5);
+    let a = vectorize_i_ext(|t, _| if t < 500. { 6.9 } else { 9.6 }, 0.01, 1e3, 5);
     assert_eq!(a[[0, 0]], 6.9);
     assert_eq!(a[[a.shape()[0] - 1, 0]], 9.6);
-    let a = vectorize_i_ext(|t, _| if t < 500. { 6.9 } else { 9.6 }, 0.1, 1., 5);
+    let a = vectorize_i_ext(|t, _| if t < 500. { 6.9 } else { 9.6 }, 0.1, 1e3, 5);
     assert_eq!(a[[0, 0]], 6.9);
     assert_eq!(a[[a.shape()[0] - 1, 0]], 9.6);
   }

@@ -1,5 +1,4 @@
 use ndarray::{Array, Array2, ArrayView, Dimension};
-
 use pyo3::prelude::*;
 
 use std::{
@@ -10,7 +9,8 @@ use std::{
 };
 
 use crate::{
-  types::Parameters, GPeParameters, NeuronData, STNParameters, ToToml, TMP_PYF_FILE_NAME, TMP_PYF_FILE_PATH,
+  gpe::GPePopulationBoundryConditions, stn::STNPopulationBoundryConditions, types::Parameters, Boundary, GPeParameters,
+  NeuronData, STNParameters, ToToml, TMP_PYF_FILE_NAME, TMP_PYF_FILE_PATH,
 };
 
 pub fn x_inf<D: Dimension>(v: &ArrayView<f64, D>, tht_x: f64, sig_x: f64) -> Array<f64, D> {
@@ -135,6 +135,7 @@ pub fn read_map_from_toml<P: AsRef<Path>>(file_path: P, version: Option<&str>, m
 
 pub fn toml_py_function_qualname_to_py_object(val: &toml::Value) -> pyo3::PyObject {
   let qualname = val.as_str().expect("Boundry condition must be stringified python function").to_owned();
+  log::debug!("{qualname}");
   let (path_module, fname) = qualname.rsplit_once(".").unwrap();
   pyo3::prepare_freethreaded_python();
   pyo3::Python::with_gil(|py| {
@@ -154,7 +155,7 @@ pub fn toml_py_function_qualname_to_py_object(val: &toml::Value) -> pyo3::PyObje
 }
 
 pub fn vectorize_i_ext_py(i_ext_py: &PyObject, dt: f64, total_t: f64, num_neurons: usize) -> Array2<f64> {
-  let num_timesteps: usize = (total_t * 1e3 / dt) as usize;
+  let num_timesteps: usize = (total_t / dt) as usize;
   pyo3::prepare_freethreaded_python();
   Python::with_gil(|py| {
     let mut a = Array2::<f64>::zeros((num_timesteps, num_neurons));
@@ -172,7 +173,7 @@ pub fn vectorize_i_ext<F>(i_ext: F, dt: f64, total_t: f64, num_neurons: usize) -
 where
   F: Fn(f64, usize) -> f64,
 {
-  let num_timesteps: usize = (total_t * 1e3 / dt) as usize;
+  let num_timesteps: usize = (total_t / dt) as usize;
   let mut a = Array2::<f64>::zeros((num_timesteps, num_neurons));
   for n in 0..num_neurons {
     for it in 0..num_timesteps {
@@ -199,6 +200,16 @@ pub fn get_py_function_source(f: &PyObject) -> Option<String> {
         .to_string()
     })
   })
+}
+
+pub fn get_py_function_source_and_name(f: &PyObject) -> Option<(String, String)> {
+  let src = get_py_function_source(&f)?;
+  let mut name = get_py_object_name(&f)?;
+  if name == "<lambda>" {
+    name = src.split_once('=').unwrap().0.trim().to_owned();
+  }
+
+  Some((src, name))
 }
 
 pub fn get_py_object_name(obj: &PyObject) -> Option<String> {
@@ -258,11 +269,12 @@ pub fn write_temp_pyf_file(pyf_src: HashMap<String, String>) -> String {
   let file_path = format!("{TMP_PYF_FILE_PATH}/{TMP_PYF_FILE_NAME}.py");
   std::fs::File::create(&file_path).unwrap();
   let mut file = std::fs::OpenOptions::new().append(true).open(&file_path).unwrap();
-  log::info!("Saved functions  at [{file_path}]");
+  log::info!("Saving functions  at [{:?}]", file_path);
 
   for src in pyf_src.values() {
     writeln!(file, "{src}").unwrap();
   }
+  file.flush().unwrap();
 
   file_path
 }
@@ -274,5 +286,31 @@ pub fn write_parameter_file(stn: &STNParameters, gpe: &GPeParameters, dir: &str)
   let file_path: std::path::PathBuf = format!("{dir}/{}", Parameters::EXP_FILE).into();
   let mut file = std::fs::File::create(&file_path).unwrap();
   write!(file, "{}", toml::Value::Table(parameter_map)).unwrap();
+  log::info!("Saved parameters at [{}]", file_path.canonicalize().unwrap().display());
+}
+
+pub fn write_boundary_file(
+  stn: &STNPopulationBoundryConditions,
+  gpe: &GPePopulationBoundryConditions,
+  dir: &str,
+  stn_qual_names: &Vec<String>,
+  gpe_qual_names: &Vec<String>,
+) {
+  let [stn_i_ext_qual_name] = stn_qual_names.as_slice() else {
+    panic!("Did not get expected number of qualified python functions");
+  };
+
+  let [gpe_i_ext_qual_name, gpe_i_app_qual_name] = gpe_qual_names.as_slice() else {
+    panic!("Did not get expected number of qualified python functions");
+  };
+
+  let bc_map = toml::value::Table::from_iter([
+    ("STN".to_owned(), stn.to_toml(&stn_i_ext_qual_name)),
+    ("GPe".to_owned(), gpe.to_toml(&gpe_i_ext_qual_name, &gpe_i_app_qual_name)),
+  ]);
+
+  let file_path: std::path::PathBuf = format!("{dir}/{}", Boundary::EXP_FILE).into();
+  let mut file = std::fs::File::create(&file_path).unwrap();
+  write!(file, "{}", toml::Value::Table(bc_map)).unwrap();
   log::info!("Saved parameters at [{}]", file_path.canonicalize().unwrap().display());
 }

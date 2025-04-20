@@ -6,7 +6,7 @@ use crate::parameters::STNParameters;
 use crate::types::*;
 use crate::util::*;
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct STN;
 
 impl Neuron for STN {

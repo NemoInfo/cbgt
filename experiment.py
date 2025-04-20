@@ -92,8 +92,7 @@ def _():
          (1, (0.435, 0.886, 0.973, 1))]
     )
     # cmap = "gray_r"
-
-    cbgt.RubinTerman.init_logger("warn")
+    # cbgt.RubinTerman.init_logger("debug")
 
     mo.md(f"""
     ###Package versions</br>

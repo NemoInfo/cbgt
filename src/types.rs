@@ -16,6 +16,7 @@ pub trait Build<N: Neuron, ND: NeuronData> {
   const PYTHON_CALLABLE_FIELD_NAMES: &[&'static str] = &[];
 }
 
+#[derive(Debug)]
 pub struct Builder<N, ND, T>
 where
   N: Neuron,
@@ -76,6 +77,7 @@ impl NeuronData for Parameters {
   const EXP_FILE: &'static str = "PARAMETERS.toml";
 }
 
+#[derive(Debug)]
 pub enum Boundary {}
 impl NeuronData for Boundary {
   type Default = (&'static str, &'static str);
@@ -151,7 +153,7 @@ where
       }
       assert!(file_name == PYF_FILE_NAME);
 
-      let py_object = toml_py_function_qualname_to_py_object(&file_name.into());
+      let py_object = toml_py_function_qualname_to_py_object(&qname.into());
       let src = get_py_function_source(&py_object).expect("Could not get source");
       let new_func_name = add_uuid_suffix(&strip_uuid_suffix(func_name));
 
@@ -160,6 +162,15 @@ where
 
       pyf_src.insert(qname.into(), src);
     }
+  }
+
+  pub fn get_callable_qnames(&self) -> Vec<String> {
+    T::PYTHON_CALLABLE_FIELD_NAMES
+      .iter()
+      .map(|&key| {
+        self.map.get(key.into()).expect("Function not found in map").as_str().expect("Field should be function").into()
+      })
+      .collect()
   }
 }
 
