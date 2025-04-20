@@ -1,11 +1,19 @@
 use log::debug;
 use ndarray::{s, Array1, Array2, ArrayView1};
-use struct_field_names_as_array::FieldNamesAsArray;
+use struct_field_names_as_array::FieldNamesAsSlice;
 
 use crate::parameters::GPeParameters;
-use crate::{util::*, ModelDescription, EXPERIMENT_BC_FILE_NAME};
+use crate::types::*;
+use crate::util::*;
 
-#[derive(FieldNamesAsArray, Debug)]
+#[derive(Default)]
+pub struct GPe;
+
+impl Neuron for GPe {
+  const TYPE: &'static str = "GPe";
+}
+
+#[derive(FieldNamesAsSlice, Debug, Default)]
 pub struct GPePopulationBoundryConditions {
   pub count: usize,
   // State
@@ -23,10 +31,62 @@ pub struct GPePopulationBoundryConditions {
   pub c_s_g: Array2<f64>,
 }
 
-impl ModelDescription for GPePopulationBoundryConditions {
-  const TYPE: &'static str = "GPe";
-  const EXPERIMENT_FILE_NAME: &'static str = EXPERIMENT_BC_FILE_NAME;
-  const DEFAULT_PATH: Option<&'static str> = None;
+impl Build<GPe, Boundary> for GPePopulationBoundryConditions {
+  const PYTHON_CALLABLE_FIELD_NAMES: &[&'static str] = &["i_ext", "i_app"];
+}
+
+pub type BuilderGPeBoundary = Builder<GPe, Boundary, GPePopulationBoundryConditions>;
+
+impl BuilderGPeBoundary {
+  pub fn finish(self, gpe_count: usize, stn_count: usize, dt: f64, total_t: f64) -> GPePopulationBoundryConditions {
+    let pbc = Array1::zeros(gpe_count);
+
+    let v =
+      self.map.get("v").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim v"));
+    assert_eq!(v.len(), gpe_count);
+    let n =
+      self.map.get("n").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim n"));
+    assert_eq!(n.len(), gpe_count);
+    let h =
+      self.map.get("h").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim h"));
+    assert_eq!(h.len(), gpe_count);
+    let r =
+      self.map.get("r").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim r"));
+    assert_eq!(r.len(), gpe_count);
+    let ca =
+      self.map.get("ca").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim ca"));
+    assert_eq!(ca.len(), gpe_count);
+    let s =
+      self.map.get("s").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim s"));
+    assert_eq!(s.len(), gpe_count);
+
+    let i_ext_f =
+      toml_py_function_qualname_to_py_object(self.map.get("i_ext").expect("default should be set by caller"));
+    let i_ext = vectorize_i_ext_py(&i_ext_f, dt, total_t, stn_count);
+
+    let i_app_f =
+      toml_py_function_qualname_to_py_object(self.map.get("i_app").expect("default should be set by caller"));
+    let i_app = vectorize_i_ext_py(&i_app_f, dt, total_t, stn_count);
+
+    debug!("GPe I_ext vectorized to\n{i_ext}");
+    debug!("GPe I_app vectorized to\n{i_app}");
+
+    let c_g_g = self
+      .map
+      .get("c_g_g")
+      .map(try_toml_value_to_2darray::<f64>)
+      .map_or(Array2::zeros((gpe_count, gpe_count)), |x| x.expect("invalid bc for c_g_s"));
+    assert_eq!(c_g_g.shape(), &[gpe_count, gpe_count]);
+
+    let c_s_g = self
+      .map
+      .get("c_s_g")
+      .map(try_toml_value_to_2darray::<f64>)
+      .map_or(Array2::zeros((gpe_count, gpe_count)), |x| x.expect("invalid bc for c_g_s"));
+    assert_eq!(c_s_g.shape(), &[stn_count, gpe_count]);
+
+    GPePopulationBoundryConditions { count: gpe_count, v, n, h, r, ca, s, c_g_g, c_s_g, i_ext, i_app }
+  }
 }
 
 impl GPePopulationBoundryConditions {
@@ -45,52 +105,6 @@ impl GPePopulationBoundryConditions {
     table.insert("i_app".to_owned(), toml::Value::String(i_app_py_qualified_name.to_owned()));
 
     toml::Value::Table(table)
-  }
-
-  pub fn from(
-    map: toml::map::Map<String, toml::Value>,
-    gpe_count: usize,
-    stn_count: usize,
-    dt: f64,
-    total_t: f64,
-  ) -> Self {
-    let pbc = Array1::zeros(gpe_count);
-
-    let v = map.get("v").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim v"));
-    assert_eq!(v.len(), gpe_count);
-    let n = map.get("n").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim n"));
-    assert_eq!(n.len(), gpe_count);
-    let h = map.get("h").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim h"));
-    assert_eq!(h.len(), gpe_count);
-    let r = map.get("r").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim r"));
-    assert_eq!(r.len(), gpe_count);
-    let ca = map.get("ca").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim ca"));
-    assert_eq!(ca.len(), gpe_count);
-    let s = map.get("s").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim s"));
-    assert_eq!(s.len(), gpe_count);
-
-    let i_ext_f = toml_py_function_qualname_to_py_object(map.get("i_ext").expect("default should be set by caller"));
-    let i_ext = vectorize_i_ext_py(&i_ext_f, dt, total_t, stn_count);
-
-    let i_app_f = toml_py_function_qualname_to_py_object(map.get("i_app").expect("default should be set by caller"));
-    let i_app = vectorize_i_ext_py(&i_app_f, dt, total_t, stn_count);
-
-    debug!("GPe I_ext vectorized to\n{i_ext}");
-    debug!("GPe I_app vectorized to\n{i_app}");
-
-    let c_g_g = map
-      .get("c_g_g")
-      .map(try_toml_value_to_2darray::<f64>)
-      .map_or(Array2::zeros((gpe_count, gpe_count)), |x| x.expect("invalid bc for c_g_s"));
-    assert_eq!(c_g_g.shape(), &[gpe_count, gpe_count]);
-
-    let c_s_g = map
-      .get("c_s_g")
-      .map(try_toml_value_to_2darray::<f64>)
-      .map_or(Array2::zeros((gpe_count, gpe_count)), |x| x.expect("invalid bc for c_g_s"));
-    assert_eq!(c_s_g.shape(), &[stn_count, gpe_count]);
-
-    Self { count: gpe_count, v, n, h, r, ca, s, c_g_g, c_s_g, i_ext, i_app }
   }
 }
 

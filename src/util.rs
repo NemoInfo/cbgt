@@ -3,11 +3,15 @@ use ndarray::{Array, Array2, ArrayView, Dimension};
 use pyo3::prelude::*;
 
 use std::{
+  collections::HashMap,
+  io::Write,
   path::Path,
   sync::atomic::{AtomicUsize, Ordering},
 };
 
-use crate::EXPERIMENTS_PATH;
+use crate::{
+  types::Parameters, GPeParameters, NeuronData, STNParameters, ToToml, TMP_PYF_FILE_NAME, TMP_PYF_FILE_PATH,
+};
 
 pub fn x_inf<D: Dimension>(v: &ArrayView<f64, D>, tht_x: f64, sig_x: f64) -> Array<f64, D> {
   1. / (1. + ((tht_x - v) / sig_x).exp())
@@ -101,9 +105,9 @@ pub fn try_toml_value_to_2darray<T: TryConvertTomlUnit + Clone>(value: &toml::Va
   Some(ndarray::stack(ndarray::Axis(0), &arrays.iter().map(|x| x.view()).collect::<Vec<_>>()[..]).unwrap())
 }
 
-pub fn update_toml_map(base: &mut toml::value::Table, update: toml::value::Table) {
+pub fn or_toml_map(base: &mut toml::value::Table, update: toml::value::Table) {
   for (key, val) in update {
-    base.insert(key, val);
+    base.entry(key).or_insert(val);
   }
 }
 
@@ -127,28 +131,6 @@ pub fn read_map_from_toml<P: AsRef<Path>>(file_path: P, version: Option<&str>, m
     .as_table()
     .expect(&format!("[{}.{}] is not a table in {}", version.unwrap_or(""), map_name, file_path.as_ref().display()))
     .to_owned()
-}
-
-pub fn build(
-  use_default: Option<&str>,
-  experiment: Option<(&str, Option<&str>)>,
-  custom_map: Option<toml::map::Map<String, toml::Value>>,
-  map_name: &str,
-) -> toml::map::Map<String, toml::Value> {
-  let mut map = toml::map::Map::new();
-
-  if let Some(path) = use_default {
-    update_toml_map(&mut map, read_map_from_toml(path, None, map_name));
-  }
-
-  if let Some((experiment, version)) = experiment {
-    update_toml_map(&mut map, read_map_from_toml(format!("{EXPERIMENTS_PATH}/{experiment}"), version, map_name));
-  }
-  if let Some(custom_map) = custom_map {
-    update_toml_map(&mut map, custom_map);
-  }
-
-  map
 }
 
 pub fn toml_py_function_qualname_to_py_object(val: &toml::Value) -> pyo3::PyObject {
@@ -260,4 +242,37 @@ pub fn array2_to_polars_column(name: &str, array: ndarray::ArrayView2<f64>) -> p
     }
   }
   chunked_builder.finish().into_column()
+}
+
+pub fn strip_uuid_suffix(s: &str) -> String {
+  let re = regex::Regex::new(r"_uuid_.*$").unwrap();
+  re.replace(s, "").into_owned()
+}
+
+pub fn add_uuid_suffix(s: &str) -> String {
+  let uuid = uuid::Uuid::new_v4();
+  format!("{}_uuid_{}", s, uuid).replace("-", "_")
+}
+
+pub fn write_temp_pyf_file(pyf_src: HashMap<String, String>) -> String {
+  let file_path = format!("{TMP_PYF_FILE_PATH}/{TMP_PYF_FILE_NAME}.py");
+  std::fs::File::create(&file_path).unwrap();
+  let mut file = std::fs::OpenOptions::new().append(true).open(&file_path).unwrap();
+  log::info!("Saved functions  at [{file_path}]");
+
+  for src in pyf_src.values() {
+    writeln!(file, "{src}").unwrap();
+  }
+
+  file_path
+}
+
+pub fn write_parameter_file(stn: &STNParameters, gpe: &GPeParameters, dir: &str) {
+  let parameter_map =
+    toml::value::Table::from_iter([("STN".to_owned(), stn.to_toml()), ("GPe".to_owned(), gpe.to_toml())]);
+
+  let file_path: std::path::PathBuf = format!("{dir}/{}", Parameters::EXP_FILE).into();
+  let mut file = std::fs::File::create(&file_path).unwrap();
+  write!(file, "{}", toml::Value::Table(parameter_map)).unwrap();
+  log::info!("Saved parameters at [{}]", file_path.canonicalize().unwrap().display());
 }

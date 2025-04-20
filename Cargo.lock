@@ -293,9 +293,11 @@ dependencies = [
  "polars",
  "pyo3",
  "pyo3-polars",
+ "regex",
  "serde",
  "struct-field-names-as-array",
  "toml",
+ "uuid",
 ]
 
 [[package]]

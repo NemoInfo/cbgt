@@ -1,13 +1,19 @@
 use log::debug;
 use ndarray::{s, Array1, Array2, ArrayView1};
-use struct_field_names_as_array::FieldNamesAsArray;
+use struct_field_names_as_array::FieldNamesAsSlice;
 
 use crate::parameters::STNParameters;
+use crate::types::*;
 use crate::util::*;
-use crate::ModelDescription;
-use crate::EXPERIMENT_BC_FILE_NAME;
 
-#[derive(FieldNamesAsArray, Debug)]
+#[derive(Default)]
+pub struct STN;
+
+impl Neuron for STN {
+  const TYPE: &'static str = "STN";
+}
+
+#[derive(FieldNamesAsSlice, Debug, Default)]
 pub struct STNPopulationBoundryConditions {
   pub count: usize,
   // State
@@ -23,10 +29,51 @@ pub struct STNPopulationBoundryConditions {
   pub c_g_s: Array2<f64>,
 }
 
-impl ModelDescription for STNPopulationBoundryConditions {
-  const TYPE: &'static str = "STN";
-  const EXPERIMENT_FILE_NAME: &'static str = EXPERIMENT_BC_FILE_NAME;
-  const DEFAULT_PATH: Option<&'static str> = None;
+impl Build<STN, Boundary> for STNPopulationBoundryConditions {
+  const PYTHON_CALLABLE_FIELD_NAMES: &[&'static str] = &["i_ext"];
+}
+
+pub type BuilderSTNBoundary = Builder<STN, Boundary, STNPopulationBoundryConditions>;
+
+impl Builder<STN, Boundary, STNPopulationBoundryConditions> {
+  pub fn finish(self, stn_count: usize, gpe_count: usize, dt: f64, total_t: f64) -> STNPopulationBoundryConditions {
+    let zero = Array1::zeros(stn_count); // TODO: Decide what should happen with the defaults
+
+    let v =
+      self.map.get("v").map(try_toml_value_to_1darray::<f64>).map_or(zero.clone(), |x| x.expect("invalid bc dim v"));
+    assert_eq!(v.len(), stn_count);
+    let n =
+      self.map.get("n").map(try_toml_value_to_1darray::<f64>).map_or(zero.clone(), |x| x.expect("invalid bc dim n"));
+    assert_eq!(n.len(), stn_count);
+    let h =
+      self.map.get("h").map(try_toml_value_to_1darray::<f64>).map_or(zero.clone(), |x| x.expect("invalid bc dim h"));
+    assert_eq!(h.len(), stn_count);
+    let r =
+      self.map.get("r").map(try_toml_value_to_1darray::<f64>).map_or(zero.clone(), |x| x.expect("invalid bc dim r"));
+    assert_eq!(r.len(), stn_count);
+    let ca =
+      self.map.get("ca").map(try_toml_value_to_1darray::<f64>).map_or(zero.clone(), |x| x.expect("invalid bc dim ca"));
+    assert_eq!(ca.len(), stn_count);
+    let s =
+      self.map.get("s").map(try_toml_value_to_1darray::<f64>).map_or(zero.clone(), |x| x.expect("invalid bc dim s"));
+    assert_eq!(s.len(), stn_count);
+
+    let i_ext_f =
+      toml_py_function_qualname_to_py_object(self.map.get("i_ext").expect("default should be set by caller"));
+    let i_ext = vectorize_i_ext_py(&i_ext_f, dt, total_t, stn_count);
+
+    debug!("STN I_ext vectorized to\n{i_ext}");
+
+    let c_g_s = self
+      .map
+      .get("c_g_s")
+      .map(try_toml_value_to_2darray::<f64>)
+      .map_or(Array2::zeros((gpe_count, stn_count)), |x| x.expect("invalid bc for c_g_s"));
+    assert_eq!(c_g_s.shape(), &[gpe_count, stn_count]);
+    assert_eq!(i_ext.shape()[1], stn_count);
+
+    STNPopulationBoundryConditions { count: stn_count, v, n, h, r, ca, s, c_g_s, i_ext }
+  }
 }
 
 impl STNPopulationBoundryConditions {
@@ -43,43 +90,6 @@ impl STNPopulationBoundryConditions {
     table.insert("i_ext".to_owned(), toml::Value::String(i_ext_py_qualified_name.to_owned()));
 
     toml::Value::Table(table)
-  }
-
-  pub fn from(
-    map: toml::map::Map<String, toml::Value>,
-    stn_count: usize,
-    gpe_count: usize,
-    dt: f64,
-    total_t: f64,
-  ) -> Self {
-    let pbc = Array1::zeros(stn_count); // TODO wathafuq
-
-    let v = map.get("v").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim v"));
-    assert_eq!(v.len(), stn_count);
-    let n = map.get("n").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim n"));
-    assert_eq!(n.len(), stn_count);
-    let h = map.get("h").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim h"));
-    assert_eq!(h.len(), stn_count);
-    let r = map.get("r").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim r"));
-    assert_eq!(r.len(), stn_count);
-    let ca = map.get("ca").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim ca"));
-    assert_eq!(ca.len(), stn_count);
-    let s = map.get("s").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim s"));
-    assert_eq!(s.len(), stn_count);
-
-    let i_ext_f = toml_py_function_qualname_to_py_object(map.get("i_ext").expect("default should be set by caller"));
-    let i_ext = vectorize_i_ext_py(&i_ext_f, dt, total_t, stn_count);
-
-    debug!("STN I_ext vectorized to\n{i_ext}");
-
-    let c_g_s = map
-      .get("c_g_s")
-      .map(try_toml_value_to_2darray::<f64>)
-      .map_or(Array2::zeros((gpe_count, stn_count)), |x| x.expect("invalid bc for c_g_s"));
-    assert_eq!(c_g_s.shape(), &[gpe_count, stn_count]);
-    assert_eq!(i_ext.shape()[1], stn_count);
-
-    Self { count: stn_count, v, n, h, r, ca, s, c_g_s, i_ext }
   }
 }
 
@@ -143,7 +153,7 @@ impl STNPopulation {
     }
   }
 
-  pub fn euler_step(&mut self, it: usize, dt: f64, stn: &STNParameters, s_gpe: &ArrayView1<f64>) {
+  pub fn euler_step(&mut self, it: usize, dt: f64, p: &STNParameters, s_gpe: &ArrayView1<f64>) {
     let t = s![it, ..];
     let t1 = s![it + 1, ..];
 
@@ -157,17 +167,17 @@ impl STNPopulation {
     );
     let (v, r, n, h, ca, s) = (&v.view(), &r.view(), &n.view(), &h.view(), &ca.view(), &s.view());
 
-    let n_inf = &x_inf(v, stn.tht_n, stn.sig_n);
-    let m_inf = &x_inf(v, stn.tht_m, stn.sig_m);
-    let h_inf = &x_inf(v, stn.tht_h, stn.sig_h);
-    let a_inf = &x_inf(v, stn.tht_a, stn.sig_a);
-    let r_inf = &x_inf(v, stn.tht_r, stn.sig_r);
-    let s_inf = &x_inf(v, stn.tht_s, stn.sig_s);
-    let b_inf = &x_inf(r, stn.tht_b, -stn.sig_b) - stn.b_const; // [!]
+    let n_inf = &x_inf(v, p.tht_n, p.sig_n);
+    let m_inf = &x_inf(v, p.tht_m, p.sig_m);
+    let h_inf = &x_inf(v, p.tht_h, p.sig_h);
+    let a_inf = &x_inf(v, p.tht_a, p.sig_a);
+    let r_inf = &x_inf(v, p.tht_r, p.sig_r);
+    let s_inf = &x_inf(v, p.tht_s, p.sig_s);
+    let b_inf = &x_inf(r, p.tht_b, -p.sig_b) - p.b_const; // [!]
 
-    let tau_n = &tau_x(v, stn.tau_n_0, stn.tau_n_1, stn.tht_n_t, stn.sig_n_t);
-    let tau_h = &tau_x(v, stn.tau_h_0, stn.tau_h_1, stn.tht_h_t, stn.sig_h_t);
-    let tau_r = &tau_x(v, stn.tau_r_0, stn.tau_r_1, stn.tht_r_t, stn.sig_r_t);
+    let tau_n = &tau_x(v, p.tau_n_0, p.tau_n_1, p.tht_n_t, p.sig_n_t);
+    let tau_h = &tau_x(v, p.tau_h_0, p.tau_h_1, p.tht_h_t, p.sig_h_t);
+    let tau_r = &tau_x(v, p.tau_r_0, p.tau_r_1, p.tht_r_t, p.sig_r_t);
 
     // Compute currents
     let mut i_l = self.i_l.slice_mut(t);
@@ -178,24 +188,24 @@ impl STNPopulation {
     let mut i_ahp = self.i_ahp.slice_mut(t);
     let mut i_g_s = self.i_g_s.slice_mut(t);
 
-    i_l.assign(&(stn.g_l * (v - stn.v_l)));
-    i_k.assign(&(stn.g_k * n.powi(4) * (v - stn.v_k)));
-    i_na.assign(&(stn.g_na * m_inf.powi(3) * h * (v - stn.v_na)));
-    i_t.assign(&(stn.g_t * a_inf.powi(3) * b_inf.pow2() * (v - stn.v_ca)));
-    i_ca.assign(&(stn.g_ca * s_inf.powi(2) * (v - stn.v_ca)));
-    i_ahp.assign(&(stn.g_ahp * (v - stn.v_k) * ca / (ca + stn.k_1)));
-    i_g_s.assign(&(stn.g_g_s * (v - stn.v_g_s) * (self.c_g_s.t().dot(s_gpe))));
+    i_l.assign(&(p.g_l * (v - p.v_l)));
+    i_k.assign(&(p.g_k * n.powi(4) * (v - p.v_k)));
+    i_na.assign(&(p.g_na * m_inf.powi(3) * h * (v - p.v_na)));
+    i_t.assign(&(p.g_t * a_inf.powi(3) * b_inf.pow2() * (v - p.v_ca)));
+    i_ca.assign(&(p.g_ca * s_inf.powi(2) * (v - p.v_ca)));
+    i_ahp.assign(&(p.g_ahp * (v - p.v_k) * ca / (ca + p.k_1)));
+    i_g_s.assign(&(p.g_g_s * (v - p.v_g_s) * (self.c_g_s.t().dot(s_gpe))));
 
     // Update state
     v1.assign(&(v + dt * (-&i_l - &i_k - &i_na - &i_t - &i_ca - &i_ahp - &i_g_s - &self.i_ext.row(it))));
-    n1.assign(&(n + dt * stn.phi_n * (n_inf - n) / tau_n));
-    h1.assign(&(h + dt * stn.phi_h * (h_inf - h) / tau_h));
-    r1.assign(&(r + dt * stn.phi_r * (r_inf - r) / tau_r));
-    ca1.assign(&(ca + dt * stn.eps * ((-&i_ca - &i_t) - stn.k_ca * ca)));
+    n1.assign(&(n + dt * p.phi_n * (n_inf - n) / tau_n));
+    h1.assign(&(h + dt * p.phi_h * (h_inf - h) / tau_h));
+    r1.assign(&(r + dt * p.phi_r * (r_inf - r) / tau_r));
+    ca1.assign(&(ca + dt * p.eps * ((-&i_ca - &i_t) - p.k_ca * ca)));
 
     // Update synapses
-    let h_syn_inf = x_inf(&(v - stn.tht_g).view(), stn.tht_g_h, stn.sig_g_h);
-    s1.assign(&(s + dt * (stn.alpha * h_syn_inf * (1. - s) - stn.beta * s)));
+    let h_syn_inf = x_inf(&(v - p.tht_g).view(), p.tht_g_h, p.sig_g_h);
+    s1.assign(&(s + dt * (p.alpha * h_syn_inf * (1. - s) - p.beta * s)));
   }
 
   pub fn into_compressed_polars_df(&self, idt: f64, odt: Option<f64>) -> polars::prelude::DataFrame {

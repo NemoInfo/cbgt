@@ -1,6 +1,6 @@
 use log::{debug, info};
 use pyo3::{prelude::*, types::PyDict};
-use struct_field_names_as_array::FieldNamesAsArray;
+use struct_field_names_as_array::FieldNamesAsSlice;
 
 use std::io::Write;
 use std::str::FromStr;
@@ -12,13 +12,16 @@ mod parameters;
 use parameters::*;
 
 mod stn;
-use stn::{STNPopulation, STNPopulationBoundryConditions};
+use stn::{BuilderSTNBoundary, STNPopulation, STNPopulationBoundryConditions, STN};
 
 mod gpe;
-use gpe::{GPePopulation, GPePopulationBoundryConditions};
+use gpe::{BuilderGPeBoundary, GPe, GPePopulation, GPePopulationBoundryConditions};
 
 mod util;
 use util::*;
+
+mod types;
+use types::{Parameters, *};
 
 #[pyclass]
 /// Rubin Terman model using Euler's method
@@ -45,35 +48,36 @@ impl RubinTerman {
     experiment: Option<(&str, Option<&str>)>,
     custom_file: Option<&str>,
   ) -> Self {
-    let num_timesteps: usize = (total_t * 1e3 / dt) as usize;
-
-    let custom_stn = custom_file.map(|f| read_map_from_toml(f, None, "STN"));
-    let custom_gpe = custom_file.map(|f| read_map_from_toml(f, None, "GPe"));
-
-    let stn_bcs = STNPopulationBoundryConditions::from(
-      STNPopulationBoundryConditions::build_map(use_default, experiment, custom_stn.clone()),
-      stn_count,
-      gpe_count,
-      dt,
-      total_t,
-    );
-
-    let gpe_bcs = GPePopulationBoundryConditions::from(
-      GPePopulationBoundryConditions::build_map(use_default, experiment, custom_gpe.clone()),
-      gpe_count,
-      stn_count,
-      dt,
-      total_t,
-    );
-
-    Self {
-      dt,
-      total_t,
-      stn_population: STNPopulation::new(num_timesteps, stn_count, gpe_count).with_bcs(stn_bcs),
-      stn_parameters: STNParameters::build(use_default, experiment, custom_stn),
-      gpe_population: GPePopulation::new(num_timesteps, gpe_count, stn_count).with_bcs(gpe_bcs),
-      gpe_parameters: GPeParameters::build(use_default, experiment, custom_gpe),
-    }
+    todo!()
+    //   let num_timesteps: usize = (total_t * 1e3 / dt) as usize;
+    //
+    //   let custom_stn = custom_file.map(|f| read_map_from_toml(f, None, "STN"));
+    //   let custom_gpe = custom_file.map(|f| read_map_from_toml(f, None, "GPe"));
+    //
+    //   let stn_bcs = STNPopulationBoundryConditions::from(
+    //     STNPopulationBoundryConditions::build_map(use_default, experiment, custom_stn.clone()),
+    //     stn_count,
+    //     gpe_count,
+    //     dt,
+    //     total_t,
+    //   );
+    //
+    //   let gpe_bcs = GPePopulationBoundryConditions::from(
+    //     GPePopulationBoundryConditions::build_map(use_default, experiment, custom_gpe.clone()),
+    //     gpe_count,
+    //     stn_count,
+    //     dt,
+    //     total_t,
+    //   );
+    //
+    //   Self {
+    //     dt,
+    //     total_t,
+    //     stn_population: STNPopulation::new(num_timesteps, stn_count, gpe_count).with_bcs(stn_bcs),
+    //     stn_parameters: STNParameters::build(use_default, experiment, custom_stn),
+    //     gpe_population: GPePopulation::new(num_timesteps, gpe_count, stn_count).with_bcs(gpe_bcs),
+    //     gpe_parameters: GPeParameters::build(use_default, experiment, custom_gpe),
+    //   }
   }
 
   pub fn run(&mut self) {
@@ -142,12 +146,83 @@ impl RubinTerman {
   }
 }
 
+pub const TMP_PYF_FILE_PATH: &'static str = ".";
+pub const TMP_PYF_FILE_NAME: &'static str = "temp_functions";
+pub const PYF_FILE_NAME: &'static str = "functions";
+
+struct NeuronConfig<N, ParameterBuilder, BoundaryBuilder>
+where
+  N: Neuron,
+  ParameterBuilder: Build<N, Parameters> + FieldNamesAsSlice,
+  BoundaryBuilder: Build<N, Boundary> + FieldNamesAsSlice,
+{
+  par_map: toml::map::Map<String, toml::Value>,
+  bcs_map: toml::map::Map<String, toml::Value>,
+  pyf_map: HashMap<String, String>,
+  _marker: std::marker::PhantomData<(N, ParameterBuilder, BoundaryBuilder)>,
+}
+// TODO: Test some invalid input
+
+impl<N, ParameterBuilder, BoundaryBuilder> NeuronConfig<N, ParameterBuilder, BoundaryBuilder>
+where
+  N: Neuron,
+  ParameterBuilder: Build<N, Parameters> + FieldNamesAsSlice,
+  BoundaryBuilder: Build<N, Boundary> + FieldNamesAsSlice,
+{
+  fn new() -> Self {
+    Self {
+      par_map: toml::map::Map::new(),
+      bcs_map: toml::map::Map::new(),
+      pyf_map: HashMap::new(),
+      _marker: std::marker::PhantomData,
+    }
+  }
+
+  fn update_from_py(&mut self, key: &Bound<'_, PyAny>, value: &Bound<'_, PyAny>) -> bool {
+    if let Some(key) = key.to_string().strip_prefix(&format!("{}_", N::TYPE.to_lowercase())) {
+      if ParameterBuilder::FIELD_NAMES_AS_SLICE.contains(&key) {
+        let kv = parse_toml_value(key, &format!("{value:?}")).as_table().unwrap().clone();
+        self.par_map.extend(kv);
+        return true;
+      } else if BoundaryBuilder::FIELD_NAMES_AS_SLICE.contains(&key) {
+        let kv = self.parse_toml_callable_py(key, value);
+        self.par_map.extend(kv);
+        return true;
+      }
+    }
+    false
+  }
+
+  fn parse_toml_callable_py(&mut self, key: &str, value: &Bound<'_, PyAny>) -> toml::map::Map<String, toml::Value> {
+    if BoundaryBuilder::PYTHON_CALLABLE_FIELD_NAMES.contains(&key) {
+      let (src, name) =
+        get_py_function_source_and_name(value.as_unbound()).expect("Could not get source and name of function");
+      let qname = format!("{TMP_PYF_FILE_PATH}/{TMP_PYF_FILE_NAME}.{name}");
+      self.pyf_map.insert(qname.clone(), src);
+      toml::map::Map::from_iter([(key.into(), toml::Value::String(qname))])
+    } else {
+      parse_toml_value(key, &format!("{value:?}")).try_into().unwrap()
+    }
+  }
+
+  fn into_maps(
+    self,
+    pyf_src: &mut HashMap<String, String>,
+  ) -> (toml::map::Map<String, toml::Value>, toml::map::Map<String, toml::Value>) {
+    pyf_src.extend(self.pyf_map);
+    (self.par_map, self.bcs_map)
+  }
+}
+
+type STNConfig = NeuronConfig<STN, STNParameters, STNPopulationBoundryConditions>;
+type GPeConfig = NeuronConfig<GPe, GPeParameters, GPePopulationBoundryConditions>;
+
 #[pymethods]
 impl RubinTerman {
   #[new]
   #[pyo3(signature=(dt=0.01, total_t=2., experiment=None, experiment_version=None, 
                     parameters_file=None, boundry_ic_file=None, use_default=true,
-                    stn_i_ext=None, gpe_i_ext=None, gpe_i_app=None, save_dir=Some("/tmp/cbgt_last_model".to_owned()), **kwds))]
+                    save_dir=Some("/tmp/cbgt_last_model".to_owned()), **kwds))]
   fn new_py(
     dt: f64,
     total_t: f64,
@@ -156,9 +231,6 @@ impl RubinTerman {
     parameters_file: Option<&str>,
     boundry_ic_file: Option<&str>,
     use_default: bool,
-    stn_i_ext: Option<PyObject>,
-    gpe_i_ext: Option<PyObject>,
-    gpe_i_app: Option<PyObject>,
     save_dir: Option<String>, // Maybe add datetime to temp save
     kwds: Option<&Bound<'_, PyDict>>,
   ) -> Self {
@@ -170,176 +242,59 @@ impl RubinTerman {
 
     let experiment = experiment.map(|name| (name, experiment_version));
 
-    let mut map_stn_params = toml::map::Map::new();
-    let mut map_gpe_params = toml::map::Map::new();
-    let mut map_stn_bcs = toml::map::Map::new();
-    let mut map_gpe_bcs = toml::map::Map::new();
+    let mut stn_kw_config = STNConfig::new();
+    let mut gpe_kw_config = GPeConfig::new();
 
-    // Parse custom parameter/boundry keywords
     if let Some(kwds) = kwds {
-      for (key, v) in kwds {
-        if let Some(k) = key.to_string().strip_prefix("stn_") {
-          if STNParameters::FIELD_NAMES_AS_ARRAY.contains(&k) {
-            let kv: toml::Value = format!("{}={}", k.to_string(), v.to_string()).parse().unwrap();
-            update_toml_map(&mut map_stn_params, kv.as_table().unwrap().to_owned());
-          } else if STNPopulationBoundryConditions::FIELD_NAMES_AS_ARRAY.contains(&k) {
-            let kv: toml::Value = parse_toml_value(k, &format!("{v:?}"));
-            update_toml_map(&mut map_stn_bcs, kv.as_table().unwrap().to_owned());
-          } else {
-            panic!("Unrecognized kwarg {key}");
-          }
-        } else if let Some(k) = key.to_string().strip_prefix("gpe_") {
-          if GPeParameters::FIELD_NAMES_AS_ARRAY.contains(&k) {
-            let kv: toml::Value = format!("{}={}", k.to_string(), v.to_string()).parse().unwrap();
-            update_toml_map(&mut map_gpe_params, kv.as_table().unwrap().to_owned());
-          } else if GPePopulationBoundryConditions::FIELD_NAMES_AS_ARRAY.contains(&k) {
-            let kv: toml::Value = parse_toml_value(k, &format!("{v:?}"));
-            update_toml_map(&mut map_gpe_bcs, kv.as_table().unwrap().to_owned());
-          } else {
-            panic!("Unrecognized kwarg {key}");
-          }
-        } else {
-          panic!("Unrecognized kwarg {key}");
+      for (key, val) in kwds {
+        if !(stn_kw_config.update_from_py(&key, &val) || gpe_kw_config.update_from_py(&key, &val)) {
+          panic!("Unexpected key word argument {}", key);
         }
       }
     }
 
-    assert!(
-      parameters_file.is_none() || (map_stn_params.is_empty() && map_gpe_params.is_empty()),
-      "Cannot give parameter both by keyword and by file at the same time!"
-    );
-    if let Some(file_path) = parameters_file {
-      map_stn_params = read_map_from_toml(file_path, None, "STN");
-      map_gpe_params = read_map_from_toml(file_path, None, "GPe");
-    }
+    let mut pyf_src = HashMap::new();
+    let (stn_kw_params, stn_kw_bcs) = stn_kw_config.into_maps(&mut pyf_src);
+    let (gpe_kw_params, gpe_kw_bcs) = gpe_kw_config.into_maps(&mut pyf_src);
 
-    let stn_parameters = STNParameters::build(use_default, experiment, Some(map_stn_params));
-    let gpe_parameters = GPeParameters::build(use_default, experiment, Some(map_gpe_params));
+    let stn_parameters = BuilderSTNParameters::build(stn_kw_params, parameters_file, experiment, use_default).finish();
+    let gpe_parameters = BuilderGPeParameters::build(gpe_kw_params, parameters_file, experiment, use_default).finish();
 
-    if let Some(save_dir) = &save_dir {
-      let parameter_map = toml::value::Table::from_iter([
-        ("STN".to_owned(), stn_parameters.to_toml()),
-        ("GPe".to_owned(), gpe_parameters.to_toml()),
-      ]);
+    let stn_bcs_builder = BuilderSTNBoundary::build(stn_kw_bcs, boundry_ic_file, experiment, use_default);
+    let gpe_bcs_builder = BuilderGPeBoundary::build(gpe_kw_bcs, boundry_ic_file, experiment, use_default);
 
-      let file_path: std::path::PathBuf = format!("{save_dir}/{EXPERIMENT_PARAMETER_FILE_NAME}").into();
-      let mut file = std::fs::File::create(&file_path).unwrap();
-      write!(file, "{}", toml::Value::Table(parameter_map)).unwrap();
-      info!("Saved parameters at [{}]", file_path.canonicalize().unwrap().display());
-    }
+    let stn_count = stn_bcs_builder.get_count().expect("stn_count not found");
+    let gpe_count = gpe_bcs_builder.get_count().expect("gpe_count not found");
 
-    assert!(
-      boundry_ic_file.is_none()
-        || (map_stn_bcs.is_empty()
-          && map_gpe_bcs.is_empty()
-          && stn_i_ext.is_none()
-          && gpe_i_ext.is_none()
-          && gpe_i_app.is_none()),
-      "Cannot give boundry condition both by keyword and by file at the same time!"
-    );
-    if let Some(file_path) = boundry_ic_file {
-      map_stn_bcs = read_map_from_toml(file_path, None, "STN");
-      map_gpe_bcs = read_map_from_toml(file_path, None, "GPe");
-    }
+    stn_bcs_builder.extends_pyf_src(&mut pyf_src);
+    gpe_bcs_builder.extends_pyf_src(&mut pyf_src);
 
-    let mut stn_bcs = STNPopulationBoundryConditions::build_map(use_default, experiment, Some(map_stn_bcs));
-    let mut gpe_bcs = GPePopulationBoundryConditions::build_map(use_default, experiment, Some(map_gpe_bcs));
-
-    let stn_count = stn_bcs
-      .get("count")
-      .expect("STN Population count not found")
-      .as_integer()
-      .expect("integer")
-      .try_into()
-      .expect("usize");
-
-    let gpe_count = gpe_bcs
-      .get("count")
-      .expect("GPe Population count not found")
-      .as_integer()
-      .expect("integer")
-      .try_into()
-      .expect("usize");
+    let pyf_file = write_temp_pyf_file(pyf_src);
 
     let num_timesteps: usize = (total_t * 1e3 / dt) as usize;
 
-    let zeroed = "zeroed".to_string(); // this should be autogenerated at runtime to be something
-                                       // like default_sha2837136127631 just so it doesn't name
-                                       // clash with a user function
-    let mut function_sources: HashMap<String, String> =
-      HashMap::from_iter([(zeroed.clone(), format!("{zeroed} = lambda t, n: 0.0\n"))]);
-    // maybe ^this should be moved to the bc file
-
-    let save_dir_tmp = save_dir.clone().unwrap_or(".".into());
-
-    if let Some(stn_i_ext) = stn_i_ext {
-      let (src, name) = get_py_function_source_and_name(&stn_i_ext).expect("Could not get source and name of function");
-      function_sources.insert(name.clone(), src);
-      stn_bcs.insert("i_ext".into(), toml::Value::String(format!("{save_dir_tmp}/functions.{name}")));
-    }
-    let stn_i_ext_qualname = stn_bcs
-      .entry("i_ext")
-      .or_insert(toml::Value::String(format!("{save_dir_tmp}/functions.{zeroed}")))
-      .as_str()
-      .expect("Current boundry should be string to python function qualified name")
-      .to_owned();
-
-    if let Some(gpe_i_ext) = gpe_i_ext {
-      let (src, name) = get_py_function_source_and_name(&gpe_i_ext).expect("Could not get source and name of function");
-      function_sources.insert(name.clone(), src);
-      gpe_bcs.insert("i_ext".into(), toml::Value::String(format!("{save_dir_tmp}/functions.{name}")));
-    }
-    let gpe_i_ext_qualname = gpe_bcs
-      .entry("i_ext")
-      .or_insert(toml::Value::String(format!("{save_dir_tmp}/functions.{zeroed}")))
-      .as_str()
-      .expect("Current boundry should be string to python function qualified name")
-      .to_owned();
-
-    if let Some(gpe_i_app) = gpe_i_app {
-      let (src, name) = get_py_function_source_and_name(&gpe_i_app).expect("Could not get source and name of function");
-      function_sources.insert(name.clone(), src);
-      gpe_bcs.insert("i_app".into(), toml::Value::String(format!("{save_dir_tmp}/functions.{name}")));
-    }
-    let gpe_i_app_qualname = gpe_bcs
-      .entry("i_app")
-      .or_insert(toml::Value::String(format!("{save_dir_tmp}/functions.{zeroed}")))
-      .as_str()
-      .expect("Current boundry should be string to python function qualified name")
-      .to_owned();
-
-    let file_path = format!("{save_dir_tmp}/functions.py");
-    std::fs::File::create(&file_path).unwrap();
-    let mut file = std::fs::OpenOptions::new().append(true).open(&file_path).unwrap();
-    info!("Saved functions  at [{save_dir_tmp}/functions.py]");
-
-    for src in function_sources.values() {
-      writeln!(file, "{src}").unwrap();
-    }
-
-    let stn_bcs = STNPopulationBoundryConditions::from(stn_bcs, stn_count, gpe_count, dt, total_t);
-    debug!("STN boundries:\n{:?}", &stn_bcs);
-    let gpe_bcs = GPePopulationBoundryConditions::from(gpe_bcs, gpe_count, stn_count, dt, total_t);
-    debug!("GPe boundries:\n{:?}", &gpe_bcs);
-
-    if let Some(save_dir) = &save_dir {
-      let bc_map = toml::value::Table::from_iter([
-        ("STN".to_owned(), stn_bcs.to_toml(&stn_i_ext_qualname)),
-        ("GPe".to_owned(), gpe_bcs.to_toml(&gpe_i_ext_qualname, &gpe_i_app_qualname)),
-      ]);
-
-      let file_path: std::path::PathBuf = format!("{save_dir}/{EXPERIMENT_BC_FILE_NAME}").into();
-      let mut file = std::fs::File::create(&file_path).unwrap();
-      write!(file, "{}", toml::Value::Table(bc_map)).unwrap();
-      info!("Saved parameters at [{}]", file_path.canonicalize().unwrap().display());
-    }
+    let stn_bcs = stn_bcs_builder.finish(stn_count, gpe_count, dt, total_t);
+    let gpe_bcs = gpe_bcs_builder.finish(gpe_count, stn_count, dt, total_t);
 
     let stn_population = STNPopulation::new(num_timesteps, stn_count, gpe_count).with_bcs(stn_bcs);
     let gpe_population = GPePopulation::new(num_timesteps, stn_count, gpe_count).with_bcs(gpe_bcs);
 
-    if save_dir.is_none() {
-      std::fs::remove_file(file_path).expect("File was just created, it should exist.");
+    if let Some(save_dir) = &save_dir {
+      write_parameter_file(&stn_parameters, &gpe_parameters, save_dir);
+
+      //     TODO
+      //     let bc_map = toml::value::Table::from_iter([
+      //       ("STN".to_owned(), stn_bcs.to_toml(&stn_i_ext_qualname)),
+      //       ("GPe".to_owned(), gpe_bcs.to_toml(&gpe_i_ext_qualname, &gpe_i_app_qualname)),
+      //     ]);
+      //
+      //     let file_path: std::path::PathBuf = format!("{save_dir}/{EXPERIMENT_BC_FILE_NAME}").into();
+      //     let mut file = std::fs::File::create(&file_path).unwrap();
+      //     write!(file, "{}", toml::Value::Table(bc_map)).unwrap();
+      //     info!("Saved parameters at [{}]", file_path.canonicalize().unwrap().display());
     }
+
+    std::fs::remove_file(pyf_file).expect("File was just created, it should exist.");
 
     Self { dt, total_t, stn_population, stn_parameters, gpe_population, gpe_parameters }
   }
