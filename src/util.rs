@@ -1,4 +1,5 @@
 use ndarray::{Array, Array2, ArrayView, Dimension};
+use polars::prelude::NamedFrom;
 use pyo3::prelude::*;
 
 use std::{
@@ -255,6 +256,20 @@ pub fn array2_to_polars_column(name: &str, array: ndarray::ArrayView2<f64>) -> p
   chunked_builder.finish().into_column()
 }
 
+pub fn unit_to_polars_column(name: &str, first: ndarray::ArrayView2<f64>, row_count: usize) -> polars::prelude::Column {
+  // Que?
+  use polars::prelude::*;
+
+  let mut chunked_builder =
+    ListPrimitiveChunkedBuilder::<Float64Type>::new(name.into(), row_count, first.len(), DataType::Float64);
+
+  chunked_builder.append_slice(first.as_slice().expect("We can slice an array2"));
+  for _ in 1..row_count {
+    chunked_builder.append_null();
+  }
+  chunked_builder.finish().into_column()
+}
+
 pub fn strip_uuid_suffix(s: &str) -> String {
   let re = regex::Regex::new(r"_uuid_.*$").unwrap();
   re.replace(s, "").into_owned()
@@ -313,4 +328,28 @@ pub fn write_boundary_file(
   let mut file = std::fs::File::create(&file_path).unwrap();
   write!(file, "{}", toml::Value::Table(bc_map)).unwrap();
   log::info!("Saved parameters at [{}]", file_path.canonicalize().unwrap().display());
+}
+
+pub trait InsertAxis<S: ndarray::Data, D: Dimension> {
+  fn iax(self, axis: usize) -> ndarray::ArrayBase<S, D::Larger>;
+}
+
+impl<S, D> InsertAxis<S, D> for ndarray::ArrayBase<S, D>
+where
+  S: ndarray::Data,
+  D: Dimension,
+{
+  fn iax(self, axis: usize) -> ndarray::ArrayBase<S, D::Larger> {
+    self.insert_axis(ndarray::Axis(axis))
+  }
+}
+
+pub trait BoolAsf64 {
+  fn as_f64(self) -> f64;
+}
+
+impl BoolAsf64 for bool {
+  fn as_f64(self) -> f64 {
+    self as u8 as f64
+  }
 }

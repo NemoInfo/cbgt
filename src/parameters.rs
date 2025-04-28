@@ -82,6 +82,14 @@ pub struct STNParameters {
 
   // Constant parameter
   pub b_const: f64,
+
+  // STDP
+  pub tau_pre: f64,
+  pub tau_post: f64,
+  pub tht_spike: f64,
+  pub min_dt_spike: f64,
+  pub a_pre: f64,
+  pub a_post: f64,
 }
 
 #[derive(Serialize, Deserialize, Debug, FieldNamesAsSlice, Clone, Default)]
@@ -155,6 +163,14 @@ pub struct GPeParameters {
 
   // Synaptic sigmoid slope
   pub sig_g_h: f64,
+
+  // STDP
+  pub tau_pre: f64,
+  pub tau_post: f64,
+  pub tht_spike: f64,
+  pub min_dt_spike: f64,
+  pub a_pre: f64,
+  pub a_post: f64,
 }
 
 impl Build<STN, Parameters> for STNParameters {}

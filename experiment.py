@@ -2,26 +2,27 @@ import marimo
 
 __generated_with = "0.11.20"
 app = marimo.App(
+    width="columns",
     app_title="Experiment",
     css_file="/home/aaron/.config/marimo/custom.css",
 )
 
 
-@app.cell(hide_code=True)
+@app.cell(column=0, hide_code=True)
 def _(mo):
     mo.md(r"""# Cortical Basal Ganglia model demo""")
     return
 
 
 @app.cell(hide_code=True)
-def _(cmap, df_episodic, plot_time_activity):
-    plot_time_activity([df_episodic["stn"], df_episodic["gpe"]], ["STN", "GPe"], title="Episodic", cmap=cmap)
+def _(df_episodic, plot_time_trace):
+    plot_time_trace([df_episodic["stn"], df_episodic["gpe"]], ["STN", "GPe"], title="Episodic Trace", color=(0.435, 0.886, 0.973, 0.7))
     return
 
 
 @app.cell(hide_code=True)
-def _(df_episodic, plot_time_trace):
-    plot_time_trace([df_episodic["stn"], df_episodic["gpe"]], ["STN", "GPe"], title="Episodic Trace", color=(0.435, 0.886, 0.973, 0.7))
+def _(cmap, df_episodic, plot_time_activity):
+    plot_time_activity([df_episodic["stn"], df_episodic["gpe"]], ["STN", "GPe"], title="Episodic", cmap=cmap, )# y="s", vmax=None, vmin=0)
     return
 
 
@@ -45,7 +46,7 @@ def _(cbgt, np):
 
         rt = cbgt.RubinTerman(dt=0.01, total_t=2, stn_count=stn_count, gpe_count=gpe_count,
                               gpe_i_app=gpe_i_app, experiment="episodic",
-                              stn_c_g_s=c_g_s, gpe_c_s_g=c_s_g, gpe_c_g_g=c_g_g,
+                              stn_w_g_s=c_g_s, gpe_w_s_g=c_s_g, gpe_w_g_g=c_g_g,
                               # gpe_g_g_g=0.06, gpe_g_s_g=0.03, stn_g_g_s=2.5
         )
         rt.run()
@@ -53,25 +54,6 @@ def _(cbgt, np):
 
     df_episodic, rt_episodic = episodic()
     return df_episodic, episodic, rt_episodic
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    options = ["wave", "cluster"]
-    radio = mo.ui.radio(options=options, value="wave", label="## Experiment")
-
-    radio
-    return options, radio
-
-
-@app.cell(hide_code=True)
-def _(cbgt, cmap, plot_time_activity, radio):
-    if radio.value:
-        rt_cluster = cbgt.RubinTerman(dt=0.01, total_t=2, experiment=radio.value)
-        rt_cluster.run()
-        df_cluster = rt_cluster.to_polars(2.)
-        plot_time_activity([df_cluster["stn"], df_cluster["gpe"]], ["STN", "GPe"], title=f"Continous {radio.value}", cmap=cmap)
-    return df_cluster, rt_cluster
 
 
 @app.cell(hide_code=True)
@@ -85,6 +67,7 @@ def _():
 
     plt.rcParams['figure.facecolor'] = 'none'
     plt.rcParams['axes.facecolor'] = 'none'
+    mpl.rcParams['figure.dpi'] = 300
 
     cmap = mpl.colors.LinearSegmentedColormap.from_list(
         "transparent_blue",
@@ -92,7 +75,7 @@ def _():
          (1, (0.435, 0.886, 0.973, 1))]
     )
     # cmap = "gray_r"
-    # cbgt.RubinTerman.init_logger("debug")
+    # cbgt.RubinTerman.init_logger("info")
 
     mo.md(f"""
     ###Package versions</br>
@@ -102,6 +85,27 @@ def _():
     - **numpy** {np.__version__}
     """)
     return cbgt, cmap, mo, mpl, np, plot_time_activity, plot_time_trace, plt
+
+
+@app.cell(column=1, hide_code=True)
+def _(mo):
+    options = ["wave", "cluster"]
+    radio = mo.ui.radio(options=options, value="wave", label="## Experiment")
+
+    radio
+    return options, radio
+
+
+@app.cell(hide_code=True)
+def _(cbgt, cmap, plot_time_activity, radio):
+    if radio.value:
+        rt_cluster = cbgt.RubinTerman(dt=0.01, total_t=2, experiment=radio.value,
+                                     # gpe_a_pre=0, gpe_a_post=0
+                                     )
+        rt_cluster.run()
+        df_cluster = rt_cluster.to_polars(2.)
+        plot_time_activity([df_cluster["stn"], df_cluster["gpe"]], ["STN", "GPe"], title=f"Continous {radio.value}", cmap=cmap)
+    return df_cluster, rt_cluster
 
 
 if __name__ == "__main__":

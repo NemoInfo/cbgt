@@ -76,6 +76,13 @@ sig_g_h = 8
 # b_inf constant parameter (pre-computed at runtime)
 b_const = nan
 
+tau_pre = 10     # STDP time-constant (ms)
+tau_post = 20    # STDP time-constant (ms)
+tht_spike = 0    # STDP spike voltage threshold (mV)
+min_dt_spike = 2 # STDP min interspike interval (ms)
+a_pre = 1        # STDP strengthen constant
+a_post = 1       # STDP weaken constant
+
 ##################################################
 [GPe]                                            #
 ##################################################
@@ -147,3 +154,10 @@ sig_n_t = -12
 
 # Synaptic sigmoid slope
 sig_g_h = 2 
+
+tau_pre = 10     # STDP time-constant (ms)
+tau_post = 20    # STDP time-constant (ms)
+tht_spike = 0    # STDP spike voltage threshold (mV)
+min_dt_spike = 2 # STDP min interspike interval (ms)
+a_pre = 1        # STDP strengthen constant
+a_post = 1       # STDP weaken constant

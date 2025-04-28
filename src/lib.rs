@@ -38,7 +38,6 @@ pub struct RubinTerman {
 }
 
 impl RubinTerman {
-  #[allow(unused)]
   pub fn new(
     dt: f64,
     total_t: f64,
@@ -75,9 +74,9 @@ impl RubinTerman {
 
     //debug!("{} STN neurons", self.stn_population.count);
     //debug!("{} GPe neurons", self.num_gpe);
-    debug!("STN -> GPe\n{:?}", gpe.c_s_g.mapv(|x| x as isize));
-    debug!("GPe -> GPe\n{:?}", gpe.c_g_g.mapv(|x| x as isize));
-    debug!("GPe -> STN\n{:?}", stn.c_g_s.mapv(|x| x as isize));
+    debug!("STN -> GPe\n{:?}", gpe.w_s_g.mapv(|x| x as isize));
+    debug!("GPe -> GPe\n{:?}", gpe.w_g_g.mapv(|x| x as isize));
+    debug!("GPe -> STN\n{:?}", stn.w_g_s.mapv(|x| x as isize));
 
     let spin_barrier = Arc::new(SpinBarrier::new(2));
 
@@ -86,26 +85,30 @@ impl RubinTerman {
     // This is okay as long as nuclei state integration is time-synchronised between threads.
     // Since euler_step only modifies _.s.row(it + 1) we can safely read _.s.row(it) at the same time
     let gpe_s = unsafe { ndarray::ArrayView2::from_shape_ptr(gpe.s.raw_dim(), gpe.s.as_ptr()) };
+    let gpe_rho_pre = unsafe { ndarray::ArrayView2::from_shape_ptr(gpe.rho_pre.raw_dim(), gpe.rho_pre.as_ptr()) };
     let stn_s = unsafe { ndarray::ArrayView2::from_shape_ptr(stn.s.raw_dim(), stn.s.as_ptr()) };
+    let stn_rho_pre = unsafe { ndarray::ArrayView2::from_shape_ptr(stn.rho_pre.raw_dim(), stn.rho_pre.as_ptr()) };
 
+    /* STN THREAD */
     let start = Instant::now();
     let barrier = spin_barrier.clone();
     let stn_thread = thread::spawn(move || {
       let start = Instant::now();
       for it in 0..num_timesteps - 1 {
         barrier.wait();
-        stn.euler_step(it, dt, &stn_parameters, &gpe_s.row(it));
+        stn.euler_step(it, dt, &stn_parameters, &gpe_s.row(it), &gpe_rho_pre.row(it));
       }
       debug!("STN time: {:.2}s", start.elapsed().as_secs_f64());
       stn
     });
 
+    /* GPe THREAD */
     let barrier = spin_barrier;
     let gpe_thread = thread::spawn(move || {
       let start = Instant::now();
       for it in 0..num_timesteps - 1 {
         barrier.wait();
-        gpe.euler_step(it, dt, &gpe_parameters, &stn_s.row(it));
+        gpe.euler_step(it, dt, &gpe_parameters, &stn_s.row(it), &stn_rho_pre.row(it));
       }
       debug!("GPe time: {:.2}s", start.elapsed().as_secs_f64());
       gpe
@@ -113,6 +116,10 @@ impl RubinTerman {
 
     self.stn_population = stn_thread.join().expect("STN thread panicked!");
     self.gpe_population = gpe_thread.join().expect("GPe thread panicked!");
+
+    info!("STN -> GPe:\n{}", self.stn_population.w_g_s);
+    info!("GPe -> GPe:\n{}", self.gpe_population.w_g_g);
+    info!("GPe -> STN:\n{}", self.gpe_population.w_s_g);
 
     info!(
       "Total real time: {:.2}s at {:.0} ms/sim_s",
@@ -124,6 +131,7 @@ impl RubinTerman {
   pub fn into_map_polars_dataframe(self, output_dt: Option<f64>) {
     let stn = self.stn_population.into_compressed_polars_df(self.dt, output_dt);
     let gpe = self.gpe_population.into_compressed_polars_df(self.dt, output_dt);
+    debug!("{:?}", gpe);
 
     let _: HashMap<&str, polars::prelude::DataFrame> = HashMap::from_iter([("stn", stn), ("gpe", gpe)]);
   }
@@ -220,6 +228,7 @@ impl RubinTerman {
     total_t *= 1e3;
     assert!(experiment.is_some() || experiment_version.is_none(), "Experiment version requires experiment");
 
+    let save_dir = save_dir.map(|x| x.trim_end_matches("/").to_owned());
     if let Some(save_dir) = &save_dir {
       std::fs::create_dir_all(save_dir).expect("Could not create save folder");
     }
@@ -269,6 +278,7 @@ impl RubinTerman {
     if let Some(save_dir) = &save_dir {
       write_parameter_file(&stn_parameters, &gpe_parameters, save_dir);
       write_boundary_file(&stn_bcs, &gpe_bcs, save_dir, &stn_qual_names, &gpe_qual_names);
+      std::fs::copy(&pyf_file, format!("{save_dir}/{PYF_FILE_NAME}.py")).unwrap();
     }
 
     let stn_population = STNPopulation::new(num_timesteps, stn_count, gpe_count).with_bcs(stn_bcs);
@@ -371,4 +381,12 @@ mod rubin_terman {
     assert_eq!(a[[0, 0]], 6.9);
     assert_eq!(a[[a.shape()[0] - 1, 0]], 9.6);
   }
+
+  //#[test]
+  //fn test_mask_mul() {
+  //  let a = ndarray::Array2::<f64>::eye(3);
+  //  let mask = ndarray::Array2::<f64>::from_elem((3, 3), 2.);
+
+  //  println!("{}", a * &mask);
+  //}
 }
