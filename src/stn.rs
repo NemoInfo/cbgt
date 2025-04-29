@@ -183,25 +183,15 @@ impl STNPopulation {
     let t = s![it, ..];
     let t1 = s![it + 1, ..];
 
-    let (
-      (v, mut v1),
-      (r, mut r1),
-      (n, mut n1),
-      (h, mut h1),
-      (ca, mut ca1),
-      (s, mut s1),
-      (rho_pre, mut rho_pre1),
-      (rho_post, mut rho_post1),
-    ) = (
-      self.v.multi_slice_mut((t, t1)),
-      self.r.multi_slice_mut((t, t1)),
-      self.n.multi_slice_mut((t, t1)),
-      self.h.multi_slice_mut((t, t1)),
-      self.ca.multi_slice_mut((t, t1)),
-      self.s.multi_slice_mut((t, t1)),
-      self.rho_pre.multi_slice_mut((t, t1)),
-      self.rho_post.multi_slice_mut((t, t1)),
-    );
+    let (v, mut v1) = self.v.multi_slice_mut((t, t1));
+    let (r, mut r1) = self.r.multi_slice_mut((t, t1));
+    let (n, mut n1) = self.n.multi_slice_mut((t, t1));
+    let (h, mut h1) = self.h.multi_slice_mut((t, t1));
+    let (ca, mut ca1) = self.ca.multi_slice_mut((t, t1));
+    let (s, mut s1) = self.s.multi_slice_mut((t, t1));
+    let (rho_pre, mut rho_pre1) = self.rho_pre.multi_slice_mut((t, t1));
+    let (rho_post, mut rho_post1) = self.rho_post.multi_slice_mut((t, t1));
+
     let (v, r, n, h, ca, s, rho_pre, rho_post) =
       (&v.view(), &r.view(), &n.view(), &h.view(), &ca.view(), &s.view(), &rho_pre.view(), &rho_post.view());
 
@@ -282,7 +272,7 @@ impl STNPopulation {
 
     let num_timesteps = self.v.slice(srange).nrows();
 
-    let time = (ndarray::Array1::range(0., num_timesteps as f64, 1.) * output_dt)
+    let time = (Array1::range(0., num_timesteps as f64, 1.) * output_dt)
       .to_shape((num_timesteps, 1))
       .unwrap()
       .to_owned();

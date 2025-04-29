@@ -1,5 +1,4 @@
 use ndarray::{Array, Array2, ArrayView, Dimension};
-use polars::prelude::NamedFrom;
 use pyo3::prelude::*;
 
 use std::{

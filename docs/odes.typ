@@ -54,9 +54,9 @@ $
 $
  pr(dot(p)) &= -frac(pr(p), par(pr(tau))) + delta(t - t_"spike") \
  po(dot(p)) &= -frac(po(p), par(po(tau))) + delta(t - t_"spike") \
- delta(t) &=  cases(
+ "Where" quad delta(t) &=  cases(
    0 &quad "if" x != 0,
-   oo &quad "if" x = 0) &, integral_(-oo)^oo delta(t) d t = 1
+   oo &quad "if" x = 0)quad, "s.t." & integral_(-oo)^oo delta(t) d t = 1
 $ 
 #v(100%)
 

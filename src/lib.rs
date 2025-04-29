@@ -381,12 +381,4 @@ mod rubin_terman {
     assert_eq!(a[[0, 0]], 6.9);
     assert_eq!(a[[a.shape()[0] - 1, 0]], 9.6);
   }
-
-  //#[test]
-  //fn test_mask_mul() {
-  //  let a = ndarray::Array2::<f64>::eye(3);
-  //  let mask = ndarray::Array2::<f64>::from_elem((3, 3), 2.);
-
-  //  println!("{}", a * &mask);
-  //}
 }

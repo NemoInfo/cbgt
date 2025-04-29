@@ -47,8 +47,7 @@ def _(cbgt, np):
         rt = cbgt.RubinTerman(dt=0.01, total_t=2, stn_count=stn_count, gpe_count=gpe_count,
                               gpe_i_app=gpe_i_app, experiment="episodic",
                               stn_w_g_s=c_g_s, gpe_w_s_g=c_s_g, gpe_w_g_g=c_g_g,
-                              # gpe_g_g_g=0.06, gpe_g_s_g=0.03, stn_g_g_s=2.5
-        )
+                              gpe_a_pre=0, gpe_a_post=0, stn_a_pre=0, stn_a_post=0)
         rt.run()
         return rt.to_polars(2.), rt
 
@@ -74,7 +73,7 @@ def _():
         [(0, (0.435, 0.886, 0.973, 0)),
          (1, (0.435, 0.886, 0.973, 1))]
     )
-    # cmap = "gray_r"
+    cmap = "YlGnBu"
     # cbgt.RubinTerman.init_logger("info")
 
     mo.md(f"""
@@ -99,8 +98,8 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(cbgt, cmap, plot_time_activity, radio):
     if radio.value:
-        rt_cluster = cbgt.RubinTerman(dt=0.01, total_t=2, experiment=radio.value,
-                                     # gpe_a_pre=0, gpe_a_post=0
+        rt_cluster = cbgt.RubinTerman(dt=0.01, total_t=5, experiment=radio.value,
+                                     gpe_a_pre=0.0, gpe_a_post=0., stn_a_pre=0, stn_a_post=0
                                      )
         rt_cluster.run()
         df_cluster = rt_cluster.to_polars(2.)
