@@ -27,7 +27,12 @@ rt = cbgt.RubinTerman(dt=0.01, total_t=2)
 data = rt.run()
 print((data["stn"]["v"]).shape)
 ```
-Experiment graphs will be kept in [the Jupyter Notebook](/experiment.ipynb). You can refer to it for more exampels.
+Experiment graphs will be kept in [the Marimo Notebook](/experiment.py). You can refer to it for more exampels.
+
+Make sure to start mairmo like this (from the venv) so the cbgt module is available. 
+```sh
+python3 -m marimo edit
+```
 
 ### To build & run rust backend bindings
 ```sh
