@@ -10,7 +10,7 @@ use std::{
 
 use crate::{
   gpe::GPePopulationBoundryConditions, stn::STNPopulationBoundryConditions, types::Parameters, Boundary, GPeParameters,
-  NeuronData, STNParameters, ToToml, TMP_PYF_FILE_NAME, TMP_PYF_FILE_PATH,
+  NeuronData, STNParameters, ToToml, PYF_FILE_NAME, TMP_PYF_FILE_NAME, TMP_PYF_FILE_PATH,
 };
 
 pub fn x_inf<D: Dimension>(v: &ArrayView<f64, D>, tht_x: f64, sig_x: f64) -> Array<f64, D> {
@@ -310,10 +310,18 @@ pub fn write_boundary_file(
   stn_qual_names: &Vec<String>,
   gpe_qual_names: &Vec<String>,
 ) {
+  let stn_qual_names = stn_qual_names
+    .iter()
+    .map(|x| format!("{dir}/{PYF_FILE_NAME}.{}", x.rsplit_once(".").unwrap().1))
+    .collect::<Vec<_>>();
   let [stn_i_ext_qual_name] = stn_qual_names.as_slice() else {
     panic!("Did not get expected number of qualified python functions");
   };
 
+  let gpe_qual_names = gpe_qual_names
+    .iter()
+    .map(|x| format!("{dir}/{PYF_FILE_NAME}.{}", x.rsplit_once(".").unwrap().1))
+    .collect::<Vec<_>>();
   let [gpe_i_ext_qual_name, gpe_i_app_qual_name] = gpe_qual_names.as_slice() else {
     panic!("Did not get expected number of qualified python functions");
   };

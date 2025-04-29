@@ -32,22 +32,7 @@ def _(cbgt, np):
         np.random.seed(69)
 
         gpe_count, stn_count = 10, 10
-        gpe_i_app = lambda t, n: -1.2
-
-        c_g_s = np.zeros((gpe_count, stn_count), dtype=np.float64)
-        c_s_g = np.zeros((stn_count, gpe_count), dtype=np.float64)
-        c_g_g = (~np.eye(gpe_count, dtype=np.bool)).astype(np.float64)
-
-        for idx_g in range(gpe_count):
-            ids_s = np.random.choice(np.arange(stn_count), size=3, replace=False)
-            c_g_s[idx_g, ids_s] = 1
-
-        c_s_g[np.arange(stn_count), np.random.permutation(gpe_count)] = 1
-
-        rt = cbgt.RubinTerman(dt=0.01, total_t=2, stn_count=stn_count, gpe_count=gpe_count,
-                              gpe_i_app=gpe_i_app, experiment="episodic",
-                              stn_w_g_s=c_g_s, gpe_w_s_g=c_s_g, gpe_w_g_g=c_g_g,
-                              gpe_a_pre=0, gpe_a_post=0, stn_a_pre=0, stn_a_post=0)
+        rt = cbgt.RubinTerman(dt=0.01, total_t=2, experiment="episodic")
         rt.run()
         return rt.to_polars(2.), rt
 
@@ -99,7 +84,7 @@ def _(mo):
 def _(cbgt, cmap, plot_time_activity, radio):
     if radio.value:
         rt_cluster = cbgt.RubinTerman(dt=0.01, total_t=5, experiment=radio.value,
-                                     gpe_a_pre=0.0, gpe_a_post=0., stn_a_pre=0, stn_a_post=0
+                                     # gpe_a_pre=0.0, gpe_a_post=0., stn_a_pre=0, stn_a_post=0
                                      )
         rt_cluster.run()
         df_cluster = rt_cluster.to_polars(2.)

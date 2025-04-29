@@ -139,9 +139,9 @@ where
       .map(|x| x.as_integer().expect(&format!("{}_count must be usize", N::TYPE.to_lowercase())) as usize)
   }
 
-  pub fn extends_pyf_src(&self, pyf_src: &mut HashMap<String, String>) {
+  pub fn extends_pyf_src(&mut self, pyf_src: &mut HashMap<String, String>) {
     for &key in T::PYTHON_CALLABLE_FIELD_NAMES {
-      let Some(value) = self.map.get(key.into()) else {
+      let Some(value) = self.map.get_mut(key.into()) else {
         continue;
       };
       let qname = value.as_str().expect(&format!("{}_{key}", N::TYPE.to_lowercase()));
@@ -159,12 +159,13 @@ where
 
       let qname = format!("{TMP_PYF_FILE_PATH}/{TMP_PYF_FILE_NAME}.{new_func_name}");
       let src = src.replace(func_name, &new_func_name);
-
+      *value = toml::Value::String(qname.clone().into());
       pyf_src.insert(qname.into(), src);
     }
   }
 
   pub fn get_callable_qnames(&self) -> Vec<String> {
+    log::debug!("{:?}", self.map);
     T::PYTHON_CALLABLE_FIELD_NAMES
       .iter()
       .map(|&key| {

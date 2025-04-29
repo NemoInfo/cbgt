@@ -257,8 +257,8 @@ impl RubinTerman {
     let gpe_parameters = BuilderGPeParameters::build(gpe_kw_params, parameters_file, experiment, use_default).finish();
 
     log::debug!("{:?}", stn_kw_bcs);
-    let stn_bcs_builder = BuilderSTNBoundary::build(stn_kw_bcs, boundry_ic_file, experiment, use_default);
-    let gpe_bcs_builder = BuilderGPeBoundary::build(gpe_kw_bcs, boundry_ic_file, experiment, use_default);
+    let mut stn_bcs_builder = BuilderSTNBoundary::build(stn_kw_bcs, boundry_ic_file, experiment, use_default);
+    let mut gpe_bcs_builder = BuilderGPeBoundary::build(gpe_kw_bcs, boundry_ic_file, experiment, use_default);
 
     log::debug!("{:?}", stn_bcs_builder);
     let stn_count = stn_bcs_builder.get_count().expect("stn_count not found");
@@ -269,6 +269,7 @@ impl RubinTerman {
 
     let stn_qual_names = stn_bcs_builder.get_callable_qnames();
     let gpe_qual_names = gpe_bcs_builder.get_callable_qnames();
+    log::debug!("{:?}", pyf_src);
     let pyf_file = write_temp_pyf_file(pyf_src);
 
     let num_timesteps: usize = (total_t / dt) as usize;

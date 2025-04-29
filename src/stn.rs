@@ -1,5 +1,5 @@
 use log::debug;
-use ndarray::{s, Array1, Array2, ArrayView1};
+use ndarray::{s, Array1, Array2, ArrayView1, Zip};
 use struct_field_names_as_array::FieldNamesAsSlice;
 
 use crate::parameters::STNParameters;
@@ -237,10 +237,10 @@ impl STNPopulation {
         *dspike = 0.;
       }
     });
-    ndarray::Zip::from(&mut rho_pre1).and(rho_pre).and(&self.dt_spike).for_each(|rho1, &rho, &dt_spike| {
+    Zip::from(&mut rho_pre1).and(rho_pre).and(&self.dt_spike).for_each(|rho1, &rho, &dt_spike| {
       *rho1 = if dt_spike == 0. { 1. } else { rho - dt / p.tau_pre * rho };
     });
-    ndarray::Zip::from(&mut rho_post1).and(rho_post).and(&self.dt_spike).for_each(|rho1, &rho, &dt_spike| {
+    Zip::from(&mut rho_post1).and(rho_post).and(&self.dt_spike).for_each(|rho1, &rho, &dt_spike| {
       *rho1 = if dt_spike == 0. { 1. } else { rho - dt / p.tau_post * rho };
     });
 
@@ -272,10 +272,8 @@ impl STNPopulation {
 
     let num_timesteps = self.v.slice(srange).nrows();
 
-    let time = (Array1::range(0., num_timesteps as f64, 1.) * output_dt)
-      .to_shape((num_timesteps, 1))
-      .unwrap()
-      .to_owned();
+    let time =
+      (Array1::range(0., num_timesteps as f64, 1.) * output_dt).to_shape((num_timesteps, 1)).unwrap().to_owned();
 
     polars::prelude::DataFrame::new(vec![
       array2_to_polars_column("time", time.view()),
