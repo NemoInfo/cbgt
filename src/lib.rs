@@ -1,7 +1,9 @@
+use env_logger::fmt::Formatter;
 use log::{debug, info};
 use pyo3::{prelude::*, types::PyDict};
 use struct_field_names_as_array::FieldNamesAsSlice;
 
+use std::io::Write;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
@@ -21,6 +23,9 @@ use util::*;
 
 mod types;
 use types::{Parameters, *};
+
+mod nework;
+use nework::*;
 
 #[pyclass]
 /// Rubin Terman model using Euler's method
@@ -273,8 +278,8 @@ impl RubinTerman {
     let pyf_file = write_temp_pyf_file(pyf_src);
 
     let num_timesteps: usize = (total_t / dt) as usize;
-    let stn_bcs = stn_bcs_builder.finish(stn_count, gpe_count, dt, total_t);
-    let gpe_bcs = gpe_bcs_builder.finish(gpe_count, stn_count, dt, total_t);
+    let stn_bcs = stn_bcs_builder.finish(stn_count, gpe_count, dt, total_t, 1);
+    let gpe_bcs = gpe_bcs_builder.finish(gpe_count, stn_count, dt, total_t, 1);
 
     if let Some(save_dir) = &save_dir {
       write_parameter_file(&stn_parameters, &gpe_parameters, save_dir);
@@ -282,8 +287,8 @@ impl RubinTerman {
       std::fs::copy(&pyf_file, format!("{save_dir}/{PYF_FILE_NAME}.py")).unwrap();
     }
 
-    let stn_population = STNPopulation::new(num_timesteps, stn_count, gpe_count).with_bcs(stn_bcs);
-    let gpe_population = GPePopulation::new(num_timesteps, stn_count, gpe_count).with_bcs(gpe_bcs);
+    let stn_population = STNPopulation::new(num_timesteps, stn_count, gpe_count, 1).with_bcs(stn_bcs);
+    let gpe_population = GPePopulation::new(num_timesteps, stn_count, gpe_count, 1).with_bcs(gpe_bcs);
 
     std::fs::remove_file(pyf_file).expect("File was just created, it should exist.");
 
@@ -332,13 +337,17 @@ impl RubinTerman {
   #[staticmethod]
   #[pyo3(signature = (log_level="debug"))]
   fn init_logger(log_level: &str) {
-    _ = env_logger::Builder::new().filter_level(log_level.parse().expect("Invalid log level")).try_init();
+    _ = env_logger::Builder::new()
+      .filter_level(log_level.parse().expect("Invalid log level"))
+      .format(|buf: &mut Formatter, record: &log::Record| writeln!(buf, "[{}] {}", record.level(), record.args()))
+      .try_init();
   }
 }
 
 #[pymodule]
 fn cbgt(m: &Bound<'_, PyModule>) -> PyResult<()> {
   m.add_class::<RubinTerman>()?;
+  m.add_class::<Network>()?;
   Ok(())
 }
 

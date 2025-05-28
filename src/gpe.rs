@@ -1,8 +1,13 @@
-use log::debug;
-use ndarray::{s, Array1, Array2, ArrayView1};
+use std::fmt::Debug;
+use std::ops::{Add, Mul};
+
+use log::{debug, warn};
+use ndarray::{s, Array1, Array2, ArrayView1, Ix2, OwnedRepr, ViewRepr};
+use ndarray::{ArrayBase, Ix1};
 use struct_field_names_as_array::FieldNamesAsSlice;
 
 use crate::parameters::GPeParameters;
+use crate::stn::{_tau_x, x_oo};
 use crate::types::*;
 use crate::util::*;
 
@@ -40,7 +45,14 @@ impl Build<GPe, Boundary> for GPePopulationBoundryConditions {
 pub type BuilderGPeBoundary = Builder<GPe, Boundary, GPePopulationBoundryConditions>;
 
 impl BuilderGPeBoundary {
-  pub fn finish(self, gpe_count: usize, stn_count: usize, dt: f64, total_t: f64) -> GPePopulationBoundryConditions {
+  pub fn finish(
+    self,
+    gpe_count: usize,
+    stn_count: usize,
+    dt: f64,
+    total_t: f64,
+    edge_resolution: u8,
+  ) -> GPePopulationBoundryConditions {
     let pbc = Array1::zeros(gpe_count);
 
     let v =
@@ -64,11 +76,11 @@ impl BuilderGPeBoundary {
 
     let i_ext_f =
       toml_py_function_qualname_to_py_object(self.map.get("i_ext").expect("default should be set by caller"));
-    let i_ext = vectorize_i_ext_py(&i_ext_f, dt, total_t, stn_count);
+    let i_ext = vectorize_i_ext_py(&i_ext_f, dt, total_t * (edge_resolution as f64), stn_count);
 
     let i_app_f =
       toml_py_function_qualname_to_py_object(self.map.get("i_app").expect("default should be set by caller"));
-    let i_app = vectorize_i_ext_py(&i_app_f, dt, total_t, stn_count);
+    let i_app = vectorize_i_ext_py(&i_app_f, dt, total_t * (edge_resolution as f64), stn_count);
 
     debug!("GPe I_ext vectorized to\n{i_ext}");
     debug!("GPe I_app vectorized to\n{i_app}");
@@ -176,7 +188,7 @@ impl GPePopulation {
     self
   }
 
-  pub fn new(num_timesteps: usize, gpe_count: usize, stn_count: usize) -> Self {
+  pub fn new(num_timesteps: usize, gpe_count: usize, stn_count: usize, edge_resolution: usize) -> Self {
     GPePopulation {
       v: Array2::zeros((num_timesteps, gpe_count)),
       n: Array2::zeros((num_timesteps, gpe_count)),
@@ -192,8 +204,8 @@ impl GPePopulation {
       i_ahp: Array2::zeros((num_timesteps, gpe_count)),
       i_s_g: Array2::zeros((num_timesteps, gpe_count)),
       i_g_g: Array2::zeros((num_timesteps, gpe_count)),
-      i_ext: Array2::zeros((num_timesteps, gpe_count)),
-      i_app: Array2::zeros((num_timesteps, gpe_count)),
+      i_ext: Array2::zeros((num_timesteps * edge_resolution, gpe_count)),
+      i_app: Array2::zeros((num_timesteps * edge_resolution, gpe_count)),
       w_s_g: Array2::zeros((stn_count, gpe_count)),
       w_g_g: Array2::zeros((gpe_count, gpe_count)),
       c_s_g: Array2::zeros((stn_count, gpe_count)),
@@ -256,13 +268,10 @@ impl GPePopulation {
     i_s_g.assign(&(p.g_s_g * (v - p.v_s_g) * (self.w_s_g.t().dot(s_stn))));
     i_g_g.assign(&(p.g_g_g * (v - p.v_g_g) * (self.w_g_g.t().dot(s))));
 
+    let dv = -&i_l - &i_k - &i_na - &i_t - &i_ca - &i_ahp - &i_s_g - &i_g_g - &self.i_ext.row(it) + &self.i_app.row(it);
+
     // Update state
-    v1.assign(
-      &(v
-        + dt
-          * (-&i_l - &i_k - &i_na - &i_t - &i_ca - &i_ahp - &i_s_g - &i_g_g - &self.i_ext.row(it)
-            + &self.i_app.row(it))),
-    );
+    v1.assign(&(v + dt * dv));
     n1.assign(&(n + dt * p.phi_n * (n_inf - n) / tau_n));
     h1.assign(&(h + dt * p.phi_h * (h_inf - h) / tau_h));
     r1.assign(&(r + dt * p.phi_r * (r_inf - r) / p.tau_r));
@@ -324,6 +333,7 @@ impl GPePopulation {
     polars::prelude::DataFrame::new(vec![
       array2_to_polars_column("time", time.view()),
       array2_to_polars_column("v", self.v.slice(srange)),
+      array2_to_polars_column("ca", self.ca.slice(srange)),
       array2_to_polars_column("i_l", self.i_l.slice(srange)),
       array2_to_polars_column("i_k", self.i_k.slice(srange)),
       array2_to_polars_column("i_na", self.i_na.slice(srange)),
@@ -335,6 +345,278 @@ impl GPePopulation {
       array2_to_polars_column("i_ext", self.i_ext.slice(srange)),
       array2_to_polars_column("s", self.s.slice(srange)),
       unit_to_polars_column("w_g_g", self.w_g_g.view(), num_timesteps),
+    ])
+    .expect("This shouldn't happend if the struct is valid")
+  }
+}
+
+pub struct GPeState<T>
+where
+  T: ndarray::Data<Elem = f64>,
+{
+  pub v: ArrayBase<T, Ix1>,
+  pub n: ArrayBase<T, Ix1>,
+  pub h: ArrayBase<T, Ix1>,
+  pub r: ArrayBase<T, Ix1>,
+  pub ca: ArrayBase<T, Ix1>,
+  pub s: ArrayBase<T, Ix1>,
+  pub w_g_g: ArrayBase<T, Ix2>,
+  pub w_s_g: ArrayBase<T, Ix2>,
+}
+
+impl<T> Debug for GPeState<T>
+where
+  T: ndarray::Data<Elem = f64> + Debug,
+{
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("GPeState")
+      .field("v", &self.v)
+      .field("n", &self.n)
+      .field("r", &self.r)
+      .field("ca", &self.ca)
+      .field("s", &self.s)
+      .field("w_g_g", &self.w_g_g)
+      .field("w_s_g", &self.w_s_g)
+      .finish()
+  }
+}
+
+impl<T> GPeState<T>
+where
+  T: ndarray::Data<Elem = f64>,
+{
+  pub fn dydt(
+    &self,
+    p: &GPeParameters,
+    s_stn: &ArrayView1<f64>,
+    rho_pre_stn: &ArrayView1<f64>,
+    i_ext: &ArrayView1<f64>,
+    i_app: &ArrayView1<f64>,
+  ) -> GPeState<OwnedRepr<f64>> {
+    let Self { v, n, h, r, ca, s, w_g_g, w_s_g } = self;
+
+    let n_oo = x_oo(v, p.tht_n, p.sig_n);
+    let m_oo = x_oo(v, p.tht_m, p.sig_m);
+    let h_oo = x_oo(v, p.tht_h, p.sig_h);
+    let a_oo = x_oo(v, p.tht_a, p.sig_a);
+    let r_oo = x_oo(v, p.tht_r, p.sig_r);
+    let s_oo = x_oo(v, p.tht_s, p.sig_s);
+    let h_syn_oo = x_oo(&(v - p.tht_g), p.tht_g_h, p.sig_g_h);
+
+    let tau_n = _tau_x(v, p.tau_n_0, p.tau_n_1, p.tht_n_t, p.sig_n_t);
+    let tau_h = _tau_x(v, p.tau_h_0, p.tau_h_1, p.tht_h_t, p.sig_h_t);
+
+    let i_l = p.g_l * (v - p.v_l);
+    let i_k = p.g_k * n.powi(4) * (v - p.v_k);
+    let i_na = p.g_na * m_oo.powi(3) * h * (v - p.v_na);
+    let i_t = p.g_t * a_oo.powi(3) * r * (v - p.v_ca);
+    let i_ca = p.g_ca * s_oo.powi(2) * (v - p.v_ca);
+    let i_ahp = p.g_ahp * (v - p.v_k) * ca / (ca + p.k_1);
+    let i_s_g = p.g_s_g * (v - p.v_s_g) * (self.w_s_g.t().dot(s_stn));
+    let i_g_g = p.g_g_g * (v - p.v_g_g) * (self.w_g_g.t().dot(s));
+
+    // Update state
+    let dy = GPeState {
+      v: -i_l - i_k - i_na - &i_t - &i_ca - i_ahp - i_s_g - i_g_g - i_ext + i_app,
+      n: p.phi_n * (n_oo - n) / tau_n,
+      h: p.phi_h * (h_oo - h) / tau_h,
+      r: p.phi_r * (r_oo - r) / p.tau_r,
+      ca: p.eps * ((-i_ca - i_t) - p.k_ca * ca),
+      s: p.alpha * h_syn_oo * (1. - s) - p.beta * s,
+      w_g_g: ndarray::Array::zeros(w_g_g.raw_dim()), // TODO - no plasticity
+      w_s_g: ndarray::Array::zeros(w_s_g.raw_dim()), // TODO - no plasticity
+    };
+
+    dy
+  }
+}
+
+impl<'l, 'r, R, L> Add<&'r GPeState<R>> for &'l GPeState<L>
+where
+  R: ndarray::Data<Elem = f64>,
+  L: ndarray::Data<Elem = f64>,
+{
+  type Output = GPeState<OwnedRepr<f64>>;
+  fn add(self, rhs: &'r GPeState<R>) -> Self::Output {
+    GPeState {
+      v: &self.v + &rhs.v,
+      n: &self.n + &rhs.n,
+      h: &self.h + &rhs.h,
+      r: &self.r + &rhs.r,
+      ca: &self.ca + &rhs.ca,
+      s: &self.s + &rhs.s,
+      w_g_g: &self.w_g_g + &rhs.w_g_g,
+      w_s_g: &self.w_s_g + &rhs.w_s_g,
+    }
+  }
+}
+
+impl<'r, R, L> Add<&'r GPeState<R>> for GPeState<L>
+where
+  R: ndarray::Data<Elem = f64>,
+  L: ndarray::Data<Elem = f64>,
+{
+  type Output = GPeState<OwnedRepr<f64>>;
+  fn add(self, rhs: &'r GPeState<R>) -> Self::Output {
+    &self + rhs
+  }
+}
+
+impl<'l, R, L> Add<GPeState<R>> for &'l GPeState<L>
+where
+  R: ndarray::Data<Elem = f64>,
+  L: ndarray::Data<Elem = f64>,
+{
+  type Output = GPeState<OwnedRepr<f64>>;
+  fn add(self, rhs: GPeState<R>) -> Self::Output {
+    self + &rhs
+  }
+}
+
+impl<R, L> Add<GPeState<R>> for GPeState<L>
+where
+  R: ndarray::Data<Elem = f64>,
+  L: ndarray::Data<Elem = f64>,
+{
+  type Output = GPeState<OwnedRepr<f64>>;
+  fn add(self, rhs: GPeState<R>) -> Self::Output {
+    &self + &rhs
+  }
+}
+
+impl<'a, T> Mul<&'a GPeState<T>> for f64
+where
+  T: ndarray::Data<Elem = f64>,
+{
+  type Output = GPeState<OwnedRepr<f64>>;
+  fn mul(self, rhs: &'a GPeState<T>) -> Self::Output {
+    GPeState {
+      v: self * &rhs.v,
+      n: self * &rhs.n,
+      h: self * &rhs.h,
+      r: self * &rhs.r,
+      ca: self * &rhs.ca,
+      s: self * &rhs.s,
+      w_g_g: self * &rhs.w_g_g,
+      w_s_g: self * &rhs.w_s_g,
+    }
+  }
+}
+
+impl<T> Mul<GPeState<T>> for f64
+where
+  T: ndarray::Data<Elem = f64>,
+{
+  type Output = GPeState<OwnedRepr<f64>>;
+  fn mul(self, rhs: GPeState<T>) -> Self::Output {
+    self * &rhs
+  }
+}
+
+impl<'a, T> Mul<f64> for &'a GPeState<T>
+where
+  T: ndarray::Data<Elem = f64>,
+{
+  type Output = GPeState<OwnedRepr<f64>>;
+  fn mul(self, rhs: f64) -> Self::Output {
+    rhs * self
+  }
+}
+
+impl<'a, T> Mul<f64> for GPeState<T>
+where
+  T: ndarray::Data<Elem = f64>,
+{
+  type Output = GPeState<OwnedRepr<f64>>;
+  fn mul(self, rhs: f64) -> Self::Output {
+    rhs * &self
+  }
+}
+
+#[derive(Default, Clone)]
+pub struct GPeHistory {
+  pub v: Array2<f64>,
+  pub n: Array2<f64>,
+  pub h: Array2<f64>,
+  pub r: Array2<f64>,
+  pub ca: Array2<f64>,
+  pub s: Array2<f64>,
+  pub w_s_g: Array2<f64>,
+  pub w_g_g: Array2<f64>,
+  pub i_ext: Array2<f64>,
+  pub i_app: Array2<f64>,
+}
+
+impl GPeHistory {
+  pub fn insert(&mut self, it: usize, y: &GPeState<OwnedRepr<f64>>) {
+    self.v.row_mut(it).assign(&y.v);
+    self.n.row_mut(it).assign(&y.n);
+    self.r.row_mut(it).assign(&y.r);
+    self.h.row_mut(it).assign(&y.h);
+    self.ca.row_mut(it).assign(&y.ca);
+    self.s.row_mut(it).assign(&y.s);
+    self.w_s_g = y.w_s_g.clone();
+    self.w_g_g = y.w_g_g.clone();
+  }
+
+  pub fn row<'a>(&'a self, it: usize) -> GPeState<ViewRepr<&'a f64>> {
+    GPeState {
+      v: self.v.row(it),
+      n: self.n.row(it),
+      h: self.h.row(it),
+      r: self.r.row(it),
+      ca: self.ca.row(it),
+      s: self.s.row(it),
+      w_s_g: self.w_s_g.view(),
+      w_g_g: self.w_g_g.view(),
+    }
+  }
+}
+
+impl GPeHistory {
+  pub fn from_population(pop: GPePopulation) -> Self {
+    let GPePopulation { v, n, h, r, ca, s, w_s_g, w_g_g, i_ext, i_app, .. } = pop;
+    Self { v, n, h, r, ca, s, w_s_g, w_g_g, i_ext, i_app }
+  }
+
+  pub fn into_compressed_polars_df(
+    &self,
+    idt: f64,
+    odt: Option<f64>,
+    edge_resolution: usize,
+  ) -> polars::prelude::DataFrame {
+    let num_timesteps = self.v.nrows();
+    let odt = odt.unwrap_or(1.); // ms
+    let step = odt / idt;
+    if step != step.trunc() {
+      log::warn!(
+        "output_dt / simulation_dt = {step} is not integer. With a step of {} => output_dt = {}",
+        step.trunc(),
+        step.trunc() * idt
+      );
+    }
+    let step = step.trunc() as usize;
+    let output_dt = step as f64 * idt;
+    let srange = s![0..num_timesteps;step, ..];
+    let erange = s![0..num_timesteps * edge_resolution;step * edge_resolution, ..];
+
+    let num_timesteps = self.v.slice(srange).nrows();
+
+    let time = (ndarray::Array1::range(0., num_timesteps as f64, 1.) * output_dt)
+      .to_shape((num_timesteps, 1))
+      .unwrap()
+      .to_owned();
+
+    polars::prelude::DataFrame::new(vec![
+      array2_to_polars_column("time", time.view()),
+      array2_to_polars_column("v", self.v.slice(srange)),
+      array2_to_polars_column("n", self.n.slice(srange)),
+      array2_to_polars_column("h", self.h.slice(srange)),
+      array2_to_polars_column("r", self.r.slice(srange)),
+      array2_to_polars_column("ca", self.ca.slice(srange)),
+      array2_to_polars_column("s", self.s.slice(srange)),
+      array2_to_polars_column("i_ext", self.i_ext.slice(erange)),
+      array2_to_polars_column("i_app", self.i_app.slice(erange)),
     ])
     .expect("This shouldn't happend if the struct is valid")
   }

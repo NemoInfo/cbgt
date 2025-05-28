@@ -1,3 +1,7 @@
+use std::fmt::Debug;
+use std::ops::Add;
+use std::ops::Mul;
+
 use log::debug;
 use ndarray::{s, Array1, Array2, ArrayView1, Zip};
 use struct_field_names_as_array::FieldNamesAsSlice;
@@ -37,7 +41,14 @@ impl Build<STN, Boundary> for STNPopulationBoundryConditions {
 pub type BuilderSTNBoundary = Builder<STN, Boundary, STNPopulationBoundryConditions>;
 
 impl Builder<STN, Boundary, STNPopulationBoundryConditions> {
-  pub fn finish(self, stn_count: usize, gpe_count: usize, dt: f64, total_t: f64) -> STNPopulationBoundryConditions {
+  pub fn finish(
+    self,
+    stn_count: usize,
+    gpe_count: usize,
+    dt: f64,
+    total_t: f64,
+    edge_resolution: u8,
+  ) -> STNPopulationBoundryConditions {
     // TODO: Decide what should happen with the defaults?
     // Instead of zero it should panic if top level use_default is set to false
     let zero = Array1::zeros(stn_count);
@@ -63,7 +74,7 @@ impl Builder<STN, Boundary, STNPopulationBoundryConditions> {
 
     let i_ext_f =
       toml_py_function_qualname_to_py_object(self.map.get("i_ext").expect("default should be set by caller"));
-    let i_ext = vectorize_i_ext_py(&i_ext_f, dt, total_t, stn_count);
+    let i_ext = vectorize_i_ext_py(&i_ext_f, dt, total_t * (edge_resolution as f64), stn_count);
     assert_eq!(i_ext.shape()[1], stn_count);
     debug!("STN I_ext vectorized to\n{i_ext}");
 
@@ -148,7 +159,7 @@ impl STNPopulation {
     self
   }
 
-  pub fn new(num_timesteps: usize, stn_count: usize, gpe_count: usize) -> Self {
+  pub fn new(num_timesteps: usize, stn_count: usize, gpe_count: usize, edge_resolution: usize) -> Self {
     Self {
       v: Array2::zeros((num_timesteps, stn_count)),
       n: Array2::zeros((num_timesteps, stn_count)),
@@ -163,12 +174,13 @@ impl STNPopulation {
       i_ca: Array2::zeros((num_timesteps, stn_count)),
       i_ahp: Array2::zeros((num_timesteps, stn_count)),
       i_g_s: Array2::zeros((num_timesteps, stn_count)),
-      i_ext: Array2::zeros((num_timesteps, stn_count)),
       c_g_s: Array2::zeros((gpe_count, stn_count)),
       w_g_s: Array2::zeros((gpe_count, stn_count)),
       rho_pre: Array2::zeros((num_timesteps, stn_count)),
       rho_post: Array2::zeros((num_timesteps, stn_count)),
       dt_spike: Array1::from_elem(stn_count, f64::INFINITY),
+
+      i_ext: Array2::zeros((num_timesteps * edge_resolution, stn_count)),
     }
   }
 
@@ -225,7 +237,9 @@ impl STNPopulation {
     i_g_s.assign(&(p.g_g_s * (v - p.v_g_s) * (self.w_g_s.t().dot(s_gpe))));
 
     // Update state
-    v1.assign(&(v + dt * (-&i_l - &i_k - &i_na - &i_t - &i_ca - &i_ahp - &i_g_s - &self.i_ext.row(it))));
+    let dv = -&i_l - &i_k - &i_na - &i_t - &i_ca - &i_ahp - &i_g_s - &self.i_ext.row(it);
+
+    v1.assign(&(v + dt * dv));
     n1.assign(&(n + dt * p.phi_n * (n_inf - n) / tau_n));
     h1.assign(&(h + dt * p.phi_h * (h_inf - h) / tau_h));
     r1.assign(&(r + dt * p.phi_r * (r_inf - r) / tau_r));
@@ -278,6 +292,9 @@ impl STNPopulation {
     polars::prelude::DataFrame::new(vec![
       array2_to_polars_column("time", time.view()),
       array2_to_polars_column("v", self.v.slice(srange)),
+      array2_to_polars_column("n", self.n.slice(srange)),
+      array2_to_polars_column("h", self.h.slice(srange)),
+      array2_to_polars_column("r", self.r.slice(srange)),
       array2_to_polars_column("ca", self.ca.slice(srange)),
       array2_to_polars_column("rho_pre", self.rho_pre.slice(srange)),
       array2_to_polars_column("rho_post", self.rho_post.slice(srange)),
@@ -290,6 +307,287 @@ impl STNPopulation {
       array2_to_polars_column("i_ahp", self.i_ahp.slice(srange)),
       array2_to_polars_column("i_g_s", self.i_g_s.slice(srange)),
       array2_to_polars_column("i_ext", self.i_ext.slice(srange)),
+    ])
+    .expect("This shouldn't happend if the struct is valid")
+  }
+}
+
+use ndarray::{ArrayBase, Ix1, Ix2, OwnedRepr, ViewRepr};
+
+#[derive(Default, Clone)]
+pub struct STNHistory {
+  pub v: Array2<f64>,
+  pub n: Array2<f64>,
+  pub h: Array2<f64>,
+  pub r: Array2<f64>,
+  pub ca: Array2<f64>,
+  pub s: Array2<f64>,
+  pub w_g_s: Array2<f64>,
+  pub i_ext: Array2<f64>,
+}
+
+impl STNHistory {
+  pub fn insert(&mut self, it: usize, y: &STNState<OwnedRepr<f64>>) {
+    self.v.row_mut(it).assign(&y.v);
+    self.n.row_mut(it).assign(&y.n);
+    self.r.row_mut(it).assign(&y.r);
+    self.h.row_mut(it).assign(&y.h);
+    self.ca.row_mut(it).assign(&y.ca);
+    self.s.row_mut(it).assign(&y.s);
+    self.w_g_s = y.w_g_s.clone();
+  }
+
+  pub fn row<'a>(&'a self, it: usize) -> STNState<ViewRepr<&'a f64>> {
+    STNState {
+      v: self.v.row(it),
+      n: self.n.row(it),
+      h: self.h.row(it),
+      r: self.r.row(it),
+      ca: self.ca.row(it),
+      s: self.s.row(it),
+      w_g_s: self.w_g_s.view(),
+    }
+  }
+}
+
+impl<'a, T> Mul<&'a STNState<T>> for f64
+where
+  T: ndarray::Data<Elem = f64>,
+{
+  type Output = STNState<OwnedRepr<f64>>;
+  fn mul(self, rhs: &'a STNState<T>) -> Self::Output {
+    STNState {
+      v: self * &rhs.v,
+      n: self * &rhs.n,
+      h: self * &rhs.h,
+      r: self * &rhs.r,
+      ca: self * &rhs.ca,
+      s: self * &rhs.s,
+      w_g_s: self * &rhs.w_g_s,
+    }
+  }
+}
+
+impl<T> Mul<STNState<T>> for f64
+where
+  T: ndarray::Data<Elem = f64>,
+{
+  type Output = STNState<OwnedRepr<f64>>;
+  fn mul(self, rhs: STNState<T>) -> Self::Output {
+    self * &rhs
+  }
+}
+
+impl<'a, T> Mul<f64> for &'a STNState<T>
+where
+  T: ndarray::Data<Elem = f64>,
+{
+  type Output = STNState<OwnedRepr<f64>>;
+  fn mul(self, rhs: f64) -> Self::Output {
+    rhs * self
+  }
+}
+
+impl<'a, T> Mul<f64> for STNState<T>
+where
+  T: ndarray::Data<Elem = f64>,
+{
+  type Output = STNState<OwnedRepr<f64>>;
+  fn mul(self, rhs: f64) -> Self::Output {
+    rhs * &self
+  }
+}
+
+pub struct STNState<T>
+where
+  T: ndarray::RawData,
+{
+  pub v: ArrayBase<T, Ix1>,
+  pub n: ArrayBase<T, Ix1>,
+  pub h: ArrayBase<T, Ix1>,
+  pub r: ArrayBase<T, Ix1>,
+  pub ca: ArrayBase<T, Ix1>,
+  pub s: ArrayBase<T, Ix1>,
+  pub w_g_s: ArrayBase<T, Ix2>,
+}
+
+impl<T> Debug for STNState<T>
+where
+  T: ndarray::Data<Elem = f64> + Debug,
+{
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("STNState")
+      .field("v", &self.v)
+      .field("n", &self.n)
+      .field("r", &self.r)
+      .field("ca", &self.ca)
+      .field("s", &self.s)
+      .field("w_g_s", &self.w_g_s)
+      .finish()
+  }
+}
+
+impl<T> STNState<T>
+where
+  T: ndarray::Data<Elem = f64>,
+{
+  pub fn dydt(
+    &self,
+    p: &STNParameters,
+    s_gpe: &ArrayView1<f64>,
+    rho_pre_gpe: &ArrayView1<f64>,
+    i_ext: &ArrayView1<f64>,
+  ) -> STNState<OwnedRepr<T::Elem>> {
+    let Self { v, n, h, r, ca, s, w_g_s } = self;
+
+    let n_oo = x_oo(v, p.tht_n, p.sig_n);
+    let m_oo = x_oo(v, p.tht_m, p.sig_m);
+    let h_oo = x_oo(v, p.tht_h, p.sig_h);
+    let a_oo = x_oo(v, p.tht_a, p.sig_a);
+    let r_oo = x_oo(v, p.tht_r, p.sig_r);
+    let s_oo = x_oo(v, p.tht_s, p.sig_s);
+    let b_oo = x_oo(r, p.tht_b, -p.sig_b) - p.b_const;
+    let h_syn_oo = x_oo(&(v - p.tht_g), p.tht_g_h, p.sig_g_h);
+
+    let tau_n = _tau_x(v, p.tau_n_0, p.tau_n_1, p.tht_n_t, p.sig_n_t);
+    let tau_h = _tau_x(v, p.tau_h_0, p.tau_h_1, p.tht_h_t, p.sig_h_t);
+    let tau_r = _tau_x(v, p.tau_r_0, p.tau_r_1, p.tht_r_t, p.sig_r_t);
+
+    let i_l = p.g_l * (v - p.v_l);
+    let i_k = p.g_k * n.powi(4) * (v - p.v_k);
+    let i_na = p.g_na * m_oo.powi(3) * h * (v - p.v_na);
+    let i_t = p.g_t * a_oo.powi(3) * b_oo.pow2() * (v - p.v_ca);
+    let i_ca = p.g_ca * s_oo.powi(2) * (v - p.v_ca);
+    let i_ahp = p.g_ahp * (v - p.v_k) * ca / (ca + p.k_1);
+    let i_g_s = p.g_g_s * (v - p.v_g_s) * (self.w_g_s.t().dot(s_gpe));
+
+    let dy = STNState {
+      v: -i_l - i_k - i_na - &i_t - &i_ca - i_ahp - i_g_s - i_ext,
+      n: p.phi_n * (n_oo - n) / tau_n,
+      h: p.phi_h * (h_oo - h) / tau_h,
+      r: p.phi_r * (r_oo - r) / tau_r,
+      ca: p.eps * ((-i_ca - i_t) - p.k_ca * ca),
+      s: p.alpha * h_syn_oo * (1. - s) - p.beta * s,
+      w_g_s: ndarray::Array::zeros(w_g_s.raw_dim()), // TODO - no plasticity
+    };
+
+    dy
+  }
+}
+
+impl<'l, 'r, R, L> Add<&'r STNState<R>> for &'l STNState<L>
+where
+  R: ndarray::Data<Elem = f64>,
+  L: ndarray::Data<Elem = f64>,
+{
+  type Output = STNState<OwnedRepr<f64>>;
+  fn add(self, rhs: &'r STNState<R>) -> Self::Output {
+    STNState {
+      v: &self.v + &rhs.v,
+      n: &self.n + &rhs.n,
+      h: &self.h + &rhs.h,
+      r: &self.r + &rhs.r,
+      ca: &self.ca + &rhs.ca,
+      s: &self.s + &rhs.s,
+      w_g_s: &self.w_g_s + &rhs.w_g_s,
+    }
+  }
+}
+
+impl<'r, R, L> Add<&'r STNState<R>> for STNState<L>
+where
+  R: ndarray::Data<Elem = f64>,
+  L: ndarray::Data<Elem = f64>,
+{
+  type Output = STNState<OwnedRepr<f64>>;
+  fn add(self, rhs: &'r STNState<R>) -> Self::Output {
+    &self + rhs
+  }
+}
+
+impl<'l, R, L> Add<STNState<R>> for &'l STNState<L>
+where
+  R: ndarray::Data<Elem = f64>,
+  L: ndarray::Data<Elem = f64>,
+{
+  type Output = STNState<OwnedRepr<f64>>;
+  fn add(self, rhs: STNState<R>) -> Self::Output {
+    self + &rhs
+  }
+}
+
+impl<R, L> Add<STNState<R>> for STNState<L>
+where
+  R: ndarray::Data<Elem = f64>,
+  L: ndarray::Data<Elem = f64>,
+{
+  type Output = STNState<OwnedRepr<f64>>;
+  fn add(self, rhs: STNState<R>) -> Self::Output {
+    &self + &rhs
+  }
+}
+
+pub fn x_oo<T: ndarray::Data<Elem = f64>>(
+  v: &ndarray::ArrayBase<T, Ix1>,
+  tht_x: f64,
+  sig_x: f64,
+) -> ndarray::Array1<f64> {
+  1. / (1. + ((tht_x - v) / sig_x).exp())
+}
+
+pub fn _tau_x<T: ndarray::Data<Elem = f64>>(
+  v: &ndarray::ArrayBase<T, Ix1>,
+  tau_x_0: f64,
+  tau_x_1: f64,
+  tht_x_t: f64,
+  sig_x_t: f64,
+) -> ndarray::Array1<f64> {
+  tau_x_0 + tau_x_1 / (1. + ((tht_x_t - v) / sig_x_t).exp())
+}
+
+impl STNHistory {
+  pub fn from_population(pop: STNPopulation) -> Self {
+    let STNPopulation { v, n, h, r, ca, s, w_g_s, i_ext, .. } = pop;
+    Self { v, n, h, r, ca, s, w_g_s, i_ext }
+  }
+
+  pub fn into_compressed_polars_df(
+    &self,
+    idt: f64,
+    odt: Option<f64>,
+    edge_resolution: usize,
+  ) -> polars::prelude::DataFrame {
+    let num_timesteps = self.v.nrows();
+    let odt = odt.unwrap_or(1.); // ms
+    let step = odt / idt;
+    if step != step.trunc() {
+      log::warn!(
+        "output_dt / simulation_dt = {step} is not integer. With a step of {} => output_dt = {}",
+        step.trunc(),
+        step.trunc() * idt
+      );
+    }
+    let step = step.trunc() as usize;
+    let output_dt = step as f64 * idt;
+    let srange = s![0..num_timesteps;step, ..];
+    let erange = s![0..num_timesteps * edge_resolution;step * edge_resolution, ..];
+
+    let num_timesteps = self.v.slice(srange).nrows();
+
+    let time =
+      (Array1::range(0., num_timesteps as f64, 1.) * output_dt).to_shape((num_timesteps, 1)).unwrap().to_owned();
+
+    polars::prelude::DataFrame::new(vec![
+      array2_to_polars_column("time", time.view()),
+      array2_to_polars_column("v", self.v.slice(srange)),
+      array2_to_polars_column("n", self.n.slice(srange)),
+      array2_to_polars_column("h", self.h.slice(srange)),
+      array2_to_polars_column("r", self.r.slice(srange)),
+      array2_to_polars_column("ca", self.ca.slice(srange)),
+      array2_to_polars_column("s", self.s.slice(srange)),
+      array2_to_polars_column("i_ext", self.i_ext.slice(erange)),
+      //array2_to_polars_column("rho_pre", self.rho_pre.slice(srange)),
+      //array2_to_polars_column("rho_post", self.rho_post.slice(srange)),
     ])
     .expect("This shouldn't happend if the struct is valid")
   }

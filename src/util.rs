@@ -54,6 +54,13 @@ impl SpinBarrier {
       }
     }
   }
+
+  pub fn sym_sync_call<F: FnMut()>(&self, mut f: F) {
+    self.wait();
+    f();
+    self.wait();
+  }
+
 }
 
 pub fn format_number(n: usize) -> String {

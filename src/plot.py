@@ -10,6 +10,7 @@ def plot_time_activity(dfs, labels, title=None, vmin=None, vmax=0, cmap="gray_r"
   num_neurons = sum([x.shape[1] for x in xs])
 
   fig, axs = plt.subplots(len(xs), 1, sharex=True, figsize=(8, num_neurons * 0.3))
+  axs = np.atleast_1d(axs)
 
   if vmin is None: vmin = min([x.min() for x in xs])
   if vmax is None: vmax = max([x.max() for x in xs])
