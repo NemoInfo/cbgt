@@ -9,7 +9,7 @@ use pyo3::{prelude::*, types::PyDict};
 use std::io::Write;
 
 use crate::gpe::{BuilderGPeBoundary, GPePopulation};
-use crate::stn::{BuilderSTNBoundary, STNPopulation};
+use crate::stn::{BuilderSTNBoundary, DiracDeltaState, STNPopulation};
 use crate::{
   format_number, write_boundary_file, write_parameter_file, write_temp_pyf_file, Boundary, BuilderGPeParameters,
   BuilderSTNParameters, GPeConfig, NeuronData, STNConfig, SpinBarrier, PYF_FILE_NAME,
@@ -38,10 +38,6 @@ impl Network {
     let stn_p = self.stn_parameters.clone();
     let gpe_p = self.gpe_parameters.clone();
 
-    let foo = Array1::zeros(10);
-    let rho_pre_gpe: &ArrayView1<f64> = &foo.view();
-    let rho_pre_stn: &ArrayView1<f64> = &foo.view();
-
     let spin_barrier = Arc::new(SpinBarrier::new(2));
 
     let stn = &mut self.stn_states;
@@ -57,37 +53,58 @@ impl Network {
     let mut s_stn_mut =
       unsafe { ndarray::ArrayViewMut1::from_shape_ptr(s_stn_shared.len(), s_stn_shared.as_mut_ptr()) };
 
+    let mut dd_stn = DiracDeltaState::new(stn.v.shape()[1]);
+    let d_stn_ref = unsafe { ndarray::ArrayView1::from_shape_ptr(dd_stn.d.len(), dd_stn.d.as_ptr()) };
+    let mut dd_gpe = DiracDeltaState::new(gpe.v.shape()[1]);
+    let d_gpe_ref = unsafe { ndarray::ArrayView1::from_shape_ptr(dd_gpe.d.len(), dd_gpe.d.as_ptr()) };
+    let mut store1 = ndarray::Array2::<f64>::zeros(stn.v.raw_dim());
+    let mut store2 = ndarray::Array2::<f64>::zeros(stn.v.raw_dim());
+
     let barrier1 = spin_barrier.clone();
     let barrier2 = spin_barrier;
-    _ = crossbeam::thread::scope(|s| {
+    let store = crossbeam::thread::scope(|s| {
       let handle1 = s.spawn(move |_| {
         for it in 0..num_timesteps - 1 {
           let edge_it = it * 2;
           let yp = &stn.row(it);
-          barrier1.sym_sync_call(|| s_stn_mut.assign(&yp.s));
-          let dy = yp.dydt(&stn_p, &s_gpe_ref, &rho_pre_gpe, &stn.i_ext.row(edge_it));
+          barrier1.sym_sync_call(|| {
+            s_stn_mut.assign(&yp.s);
+            dd_stn.update(&yp.v, dt);
+          });
+          let dy = yp.dydt(&stn_p, &d_stn_ref, &d_gpe_ref, &s_gpe_ref, &stn.i_ext.row(edge_it));
           let yn = yp + dy * dt;
           stn.insert(it + 1, &yn);
+          store1.row_mut(it).assign(&dd_stn.dt_spike);
         }
+        store1
       });
 
       let handle2 = s.spawn(move |_| {
         for it in 0..num_timesteps - 1 {
           let edge_it = it * 2;
           let yp = &gpe.row(it);
-          barrier2.sym_sync_call(|| s_gpe_mut.assign(&yp.s));
-          let dy = yp.dydt(&gpe_p, &s_stn_ref, &rho_pre_stn, &gpe.i_ext.row(edge_it), &gpe.i_app.row(edge_it));
+          barrier2.sym_sync_call(|| {
+            s_gpe_mut.assign(&yp.s);
+            dd_gpe.update(&yp.v, dt);
+          });
+          let dy =
+            yp.dydt(&gpe_p, &d_gpe_ref, &d_stn_ref, &s_stn_ref, &gpe.i_ext.row(edge_it), &gpe.i_app.row(edge_it));
           let yn = yp + dy * dt;
           gpe.insert(it + 1, &yn);
+          store2.row_mut(it).assign(&dd_gpe.dt_spike);
         }
+        store2
       });
 
-      handle1.join().unwrap();
-      handle2.join().unwrap();
+      (handle1.join().unwrap_or_else(|e| panic!("{e:?}")), handle2.join().unwrap_or_else(|e| panic!("{e:?}")))
     })
     .unwrap();
+
+    self.stn_states.n = store.0;
+    self.gpe_states.n = store.1;
   }
 
+  #[allow(unused)]
   fn run_rk4(&mut self) {
     let num_timesteps: usize = (self.total_t / self.dt) as usize;
 
@@ -120,47 +137,47 @@ impl Network {
     _ = crossbeam::thread::scope(|s| {
       let handle1 = s.spawn(move |_| {
         for it in 0..num_timesteps - 1 {
-          let edge_it = it * 2;
-          let yp = &stn.row(it);
-          barrier1.sym_sync_call(|| s_stn_mut.assign(&yp.s));
-          let k1 = yp.dydt(&stn_p, &s_gpe_ref, rho_pre_gpe, &stn.i_ext.row(edge_it));
-          let k2 = (yp + &(dt / 2. * &k1)).dydt(&stn_p, &s_gpe_ref, rho_pre_gpe, &stn.i_ext.row(edge_it + 1));
-          let k3 = (yp + &(dt / 2. * &k2)).dydt(&stn_p, &s_gpe_ref, rho_pre_gpe, &stn.i_ext.row(edge_it + 1));
-          let k4 = (yp + &(dt * &k3)).dydt(&stn_p, &s_gpe_ref, rho_pre_gpe, &stn.i_ext.row(edge_it + 2));
-          let yn = yp + dt / 6. * (k1 + 2. * k2 + 2. * k3 + k4);
-          stn.insert(it + 1, &yn);
+          //         let edge_it = it * 2;
+          //         let yp = &stn.row(it);
+          //         barrier1.sym_sync_call(|| s_stn_mut.assign(&yp.s));
+          //         let k1 = yp.dydt(&stn_p, &s_gpe_ref, rho_pre_gpe, &stn.i_ext.row(edge_it));
+          //         let k2 = (yp + &(dt / 2. * &k1)).dydt(&stn_p, &s_gpe_ref, rho_pre_gpe, &stn.i_ext.row(edge_it + 1));
+          //         let k3 = (yp + &(dt / 2. * &k2)).dydt(&stn_p, &s_gpe_ref, rho_pre_gpe, &stn.i_ext.row(edge_it + 1));
+          //         let k4 = (yp + &(dt * &k3)).dydt(&stn_p, &s_gpe_ref, rho_pre_gpe, &stn.i_ext.row(edge_it + 2));
+          //         let yn = yp + dt / 6. * (k1 + 2. * k2 + 2. * k3 + k4);
+          //         stn.insert(it + 1, &yn);
         }
       });
 
       let handle2 = s.spawn(move |_| {
         for it in 0..num_timesteps - 1 {
-          let edge_it = it * 2;
-          let yp = &gpe.row(it);
-          barrier2.sym_sync_call(|| s_gpe_mut.assign(&yp.s));
-          let k1 = yp.dydt(&gpe_p, &s_stn_ref, rho_pre_stn, &gpe.i_ext.row(edge_it), &gpe.i_app.row(edge_it));
-          let k2 = (yp + &(dt / 2. * &k1)).dydt(
-            &gpe_p,
-            &s_stn_ref,
-            rho_pre_stn,
-            &gpe.i_ext.row(edge_it + 1),
-            &gpe.i_app.row(edge_it + 1),
-          );
-          let k3 = (yp + &(dt / 2. * &k2)).dydt(
-            &gpe_p,
-            &s_stn_ref,
-            rho_pre_stn,
-            &gpe.i_ext.row(edge_it + 1),
-            &gpe.i_app.row(edge_it + 1),
-          );
-          let k4 = (yp + &(dt * &k3)).dydt(
-            &gpe_p,
-            &s_stn_ref,
-            rho_pre_stn,
-            &gpe.i_ext.row(edge_it + 2),
-            &gpe.i_app.row(edge_it + 2),
-          );
-          let yn = yp + dt / 6. * &(k1 + 2. * k2 + 2. * k3 + k4);
-          gpe.insert(it + 1, &yn);
+          //         let edge_it = it * 2;
+          //         let yp = &gpe.row(it);
+          //         barrier2.sym_sync_call(|| s_gpe_mut.assign(&yp.s));
+          //         let k1 = yp.dydt(&gpe_p, &s_stn_ref, rho_pre_stn, &gpe.i_ext.row(edge_it), &gpe.i_app.row(edge_it));
+          //         let k2 = (yp + &(dt / 2. * &k1)).dydt(
+          //           &gpe_p,
+          //           &s_stn_ref,
+          //           rho_pre_stn,
+          //           &gpe.i_ext.row(edge_it + 1),
+          //           &gpe.i_app.row(edge_it + 1),
+          //         );
+          //         let k3 = (yp + &(dt / 2. * &k2)).dydt(
+          //           &gpe_p,
+          //           &s_stn_ref,
+          //           rho_pre_stn,
+          //           &gpe.i_ext.row(edge_it + 1),
+          //           &gpe.i_app.row(edge_it + 1),
+          //         );
+          //         let k4 = (yp + &(dt * &k3)).dydt(
+          //           &gpe_p,
+          //           &s_stn_ref,
+          //           rho_pre_stn,
+          //           &gpe.i_ext.row(edge_it + 2),
+          //           &gpe.i_app.row(edge_it + 2),
+          //         );
+          //         let yn = yp + dt / 6. * &(k1 + 2. * k2 + 2. * k3 + k4);
+          //         gpe.insert(it + 1, &yn);
         }
       });
 

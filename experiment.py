@@ -25,6 +25,25 @@ def _(df_episodic, plot_time_trace):
     return
 
 
+@app.cell
+def _(cmap, df_episodic, plot_time_activity):
+    plot_time_activity(
+        [df_episodic["stn"]],
+        ["STN"],
+        title="Episodic",
+        cmap=cmap,
+        y="ca", vmin=0, vmax=None
+    )
+    plot_time_activity(
+        [df_episodic["gpe"]],
+        ["GPe"],
+        title="Episodic",
+        cmap=cmap,
+        y="ca", vmin=0, vmax=None
+    )
+    return
+
+
 @app.cell(hide_code=True)
 def _(cmap, df_episodic, plot_time_activity):
     plot_time_activity(
@@ -42,7 +61,7 @@ def _(cbgt, np):
         np.random.seed(69)
 
         gpe_count, stn_count = 10, 10
-        rt = cbgt.RubinTerman(dt=0.01, total_t=2, experiment="episodic")
+        rt = cbgt.RubinTerman(dt=0.01, total_t=2, experiment="cluster")
         rt.run()
         return rt.to_polars(), rt
 

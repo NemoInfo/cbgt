@@ -3,6 +3,7 @@ use std::ops::Add;
 use std::ops::Mul;
 
 use log::debug;
+use ndarray::Array3;
 use ndarray::{s, Array1, Array2, ArrayView1, Zip};
 use struct_field_names_as_array::FieldNamesAsSlice;
 
@@ -323,6 +324,7 @@ pub struct STNHistory {
   pub ca: Array2<f64>,
   pub s: Array2<f64>,
   pub w_g_s: Array2<f64>,
+  pub ca_g_s: Array3<f64>,
   pub i_ext: Array2<f64>,
 }
 
@@ -335,6 +337,7 @@ impl STNHistory {
     self.ca.row_mut(it).assign(&y.ca);
     self.s.row_mut(it).assign(&y.s);
     self.w_g_s = y.w_g_s.clone();
+    self.ca_g_s.slice_mut(s![it, .., ..]).assign(&y.ca_g_s);
   }
 
   pub fn row<'a>(&'a self, it: usize) -> STNState<ViewRepr<&'a f64>> {
@@ -346,6 +349,7 @@ impl STNHistory {
       ca: self.ca.row(it),
       s: self.s.row(it),
       w_g_s: self.w_g_s.view(),
+      ca_g_s: self.ca_g_s.slice(s![it, .., ..]),
     }
   }
 }
@@ -364,6 +368,7 @@ where
       ca: self * &rhs.ca,
       s: self * &rhs.s,
       w_g_s: self * &rhs.w_g_s,
+      ca_g_s: self * &rhs.ca_g_s,
     }
   }
 }
@@ -409,11 +414,45 @@ where
   pub ca: ArrayBase<T, Ix1>,
   pub s: ArrayBase<T, Ix1>,
   pub w_g_s: ArrayBase<T, Ix2>,
+  pub ca_g_s: ArrayBase<T, Ix2>,
+}
+
+pub struct DiracDeltaState<T>
+where
+  T: ndarray::Data,
+{
+  pub d: ArrayBase<T, Ix1>,
+  pub dt_spike: ArrayBase<T, Ix1>,
+}
+
+impl DiracDeltaState<OwnedRepr<f64>> {
+  pub fn new<Sh: ndarray::ShapeBuilder<Dim = Ix1> + Clone>(shape: Sh) -> Self {
+    Self { d: Array1::zeros(shape.clone()), dt_spike: Array1::zeros(shape) }
+  }
+}
+
+impl<T> DiracDeltaState<T>
+where
+  T: ndarray::DataMut<Elem = f64>,
+{
+  pub fn update<TS: ndarray::Data<Elem = f64>>(&mut self, v: &ArrayBase<TS, Ix1>, dt: f64) {
+    Zip::from(&mut self.d).and(&mut self.dt_spike).and(v).for_each(|d, dt_spike, &v| {
+      *dt_spike += dt;
+      if v > 0. && *dt_spike > 2. {
+        *d = 1.;
+        *dt_spike = 0.;
+      } else {
+        *d = 0.;
+      }
+      //     *d = (v > 0. && *dt_spike > 2.) as u8 as f64;
+      //     *dt_spike *= (v != 1.) as u8 as f64;
+    });
+  }
 }
 
 impl<T> Debug for STNState<T>
 where
-  T: ndarray::Data<Elem = f64> + Debug,
+  T: ndarray::Data<Elem = f64>,
 {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     f.debug_struct("STNState")
@@ -434,11 +473,15 @@ where
   pub fn dydt(
     &self,
     p: &STNParameters,
+    d_stn: &ArrayView1<f64>,
+    d_gpe: &ArrayView1<f64>,
     s_gpe: &ArrayView1<f64>,
-    rho_pre_gpe: &ArrayView1<f64>,
     i_ext: &ArrayView1<f64>,
   ) -> STNState<OwnedRepr<T::Elem>> {
-    let Self { v, n, h, r, ca, s, w_g_s } = self;
+    let Self { v, n, h, r, ca, s, w_g_s, ca_g_s } = self;
+    let tau_ca = 7.;
+    let ca_pre = 0.99;
+    let ca_post = 1.55;
 
     let n_oo = x_oo(v, p.tht_n, p.sig_n);
     let m_oo = x_oo(v, p.tht_m, p.sig_m);
@@ -469,6 +512,9 @@ where
       ca: p.eps * ((-i_ca - i_t) - p.k_ca * ca),
       s: p.alpha * h_syn_oo * (1. - s) - p.beta * s,
       w_g_s: ndarray::Array::zeros(w_g_s.raw_dim()), // TODO - no plasticity
+      ca_g_s: -ca_g_s / tau_ca
+        + ca_pre * &d_gpe.insert_axis(ndarray::Axis(1))
+        + ca_post * &d_stn.insert_axis(ndarray::Axis(0)),
     };
 
     dy
@@ -490,6 +536,7 @@ where
       ca: &self.ca + &rhs.ca,
       s: &self.s + &rhs.s,
       w_g_s: &self.w_g_s + &rhs.w_g_s,
+      ca_g_s: &self.ca_g_s + &rhs.ca_g_s,
     }
   }
 }
@@ -548,7 +595,7 @@ pub fn _tau_x<T: ndarray::Data<Elem = f64>>(
 impl STNHistory {
   pub fn from_population(pop: STNPopulation) -> Self {
     let STNPopulation { v, n, h, r, ca, s, w_g_s, i_ext, .. } = pop;
-    Self { v, n, h, r, ca, s, w_g_s, i_ext }
+    Self { n, h, r, ca, s, i_ext, ca_g_s: Array3::zeros([v.shape()[0], w_g_s.shape()[0], w_g_s.shape()[1]]), v, w_g_s }
   }
 
   pub fn into_compressed_polars_df(
@@ -570,6 +617,7 @@ impl STNHistory {
     let step = step.trunc() as usize;
     let output_dt = step as f64 * idt;
     let srange = s![0..num_timesteps;step, ..];
+    let carange = s![0..num_timesteps;step, .., ..];
     let erange = s![0..num_timesteps * edge_resolution;step * edge_resolution, ..];
 
     let num_timesteps = self.v.slice(srange).nrows();
@@ -586,8 +634,7 @@ impl STNHistory {
       array2_to_polars_column("ca", self.ca.slice(srange)),
       array2_to_polars_column("s", self.s.slice(srange)),
       array2_to_polars_column("i_ext", self.i_ext.slice(erange)),
-      //array2_to_polars_column("rho_pre", self.rho_pre.slice(srange)),
-      //array2_to_polars_column("rho_post", self.rho_post.slice(srange)),
+      array3_to_polars_column("ca_g_s", self.ca_g_s.slice(carange)),
     ])
     .expect("This shouldn't happend if the struct is valid")
   }

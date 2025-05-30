@@ -34,8 +34,6 @@ def plot_time_activity(dfs, labels, title=None, vmin=None, vmax=0, cmap="gray_r"
   if title is not None: axs[0].set_title(title, fontsize=16)
   if file is not None: plt.savefig("file")
 
-  plt.show()
-
 
 def plot_time_trace(dfs, labels, title=None, file=None, color="k", y="v"):
   dt = dfs[0]["time"][1]
@@ -45,7 +43,6 @@ def plot_time_trace(dfs, labels, title=None, file=None, color="k", y="v"):
                           len(xs),
                           figsize=(4.5 * len(xs), max_num_neurons * 0.6),
                           sharex=True,
-                          sharey=True,
                           tight_layout=True,
                           gridspec_kw={'hspace': 0})
 
@@ -61,5 +58,3 @@ def plot_time_trace(dfs, labels, title=None, file=None, color="k", y="v"):
 
   if title is not None: fig.suptitle(title, fontsize=16)
   if file is not None: plt.savefig(file)
-
-  plt.show()

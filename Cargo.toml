@@ -11,7 +11,7 @@ crate-type = ["cdylib", "rlib"]
 ndarray = "0.16.1"
 pyo3 = "0.23.0"
 pyo3-polars = "0.20.0"
-polars = { version = "0.46.0", features = ["parquet"]}
+polars = { version = "0.46.0", features = ["parquet", "dtype-array"]}
 serde = { version = "1.0", features = ["derive"] }
 struct-field-names-as-array = "0.3.0"
 toml = "0.5"

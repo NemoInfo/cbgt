@@ -37,7 +37,7 @@ IAHP &= par(g_"AHP") (v - par(v_"K")) frac(["Ca"], ["Ca"] + par(k_1)) \
 dot(["Ca"]) &= par(epsilon) (-ICa - IT - par(k_"Ca")["Ca"]) \
 dot(s) &= par(alpha) H_oo (v - par(theta_g))(1 - s) - par(beta)s \
 H_oo (v) &= (1 + exp(-frac(v - par(theta^H_g), par(sigma^H_g))))^(-1) \
-IGS &=  par(g_("G" -> "S")) (bv - par(v_("G" -> "S"))) sum_(j in"GPe") w_j bold(s_j)\
+IGS &=  par(g_("G" -> "S")) (bv - par(v_("G" -> "S"))) sum_(s_j in"GPe") w_j bold(s_j)\
 $ 
 
 == GPe
@@ -48,7 +48,6 @@ par(C_"m") bold(dv) &= - IL - IK - INa - IT - ICa - IAHP - ISG - IGG + par(I_"ap
 IT &= par(g_"T") a^3_oo bold(r) (bv - par(v_"Ca")) \
 bold(dot(r)) &= par(Phi_r) frac(r_oo - bv, par(tau_r))
 $
-
 == STDP
 
 $

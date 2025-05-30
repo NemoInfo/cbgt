@@ -60,7 +60,6 @@ impl SpinBarrier {
     f();
     self.wait();
   }
-
 }
 
 pub fn format_number(n: usize) -> String {
@@ -243,6 +242,36 @@ pub fn parse_toml_value(k: &str, v: &str) -> toml::Value {
       kv.parse().expect("Expected numpy array in the form \"array([1,2,3])\"")
     }
   }
+}
+
+pub fn array3_to_polars_column(name: &str, array: ndarray::ArrayView3<f64>) -> polars::prelude::Column {
+  use polars::prelude::*;
+  let [_, nrows, ncols] = *array.shape() else { unreachable!() };
+
+  Series::from_any_values(
+    name.into(),
+    array
+      .outer_iter()
+      .map(|x| {
+        AnyValue::Array(
+          Series::from_any_values(
+            "".into(),
+            x.outer_iter()
+              .map(|row| AnyValue::Array(Series::from_vec("".into(), row.to_vec()), ncols))
+              .collect::<Vec<_>>()
+              .as_slice(),
+            true,
+          )
+          .unwrap(),
+          nrows,
+        )
+      })
+      .collect::<Vec<_>>()
+      .as_slice(),
+    true,
+  )
+  .unwrap()
+  .into_column()
 }
 
 pub fn array2_to_polars_column(name: &str, array: ndarray::ArrayView2<f64>) -> polars::prelude::Column {

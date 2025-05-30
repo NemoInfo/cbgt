@@ -24,8 +24,8 @@ use util::*;
 mod types;
 use types::{Parameters, *};
 
-mod nework;
-use nework::*;
+mod network;
+use network::*;
 
 #[pyclass]
 /// Rubin Terman model using Euler's method
@@ -390,5 +390,14 @@ mod rubin_terman {
     let a = vectorize_i_ext(|t, _| if t < 500. { 6.9 } else { 9.6 }, 0.1, 1e3, 5);
     assert_eq!(a[[0, 0]], 6.9);
     assert_eq!(a[[a.shape()[0] - 1, 0]], 9.6);
+  }
+
+  #[test]
+  fn test_outer_add() {
+    let a = ndarray::Array1::<f64>::range(0., 10., 1.);
+    let b = ndarray::Array2::<f64>::ones((10, 10));
+
+    println!("---A---\n{}\n---B---\n{}\n--A+B--\n{}", &a, &b, &a + &b);
+    assert!(false);
   }
 }

@@ -1,8 +1,8 @@
 use std::fmt::Debug;
 use std::ops::{Add, Mul};
 
-use log::{debug, warn};
-use ndarray::{s, Array1, Array2, ArrayView1, Ix2, OwnedRepr, ViewRepr};
+use log::debug;
+use ndarray::{s, Array1, Array2, Array3, ArrayView1, Ix2, OwnedRepr, ViewRepr};
 use ndarray::{ArrayBase, Ix1};
 use struct_field_names_as_array::FieldNamesAsSlice;
 
@@ -362,6 +362,8 @@ where
   pub s: ArrayBase<T, Ix1>,
   pub w_g_g: ArrayBase<T, Ix2>,
   pub w_s_g: ArrayBase<T, Ix2>,
+  pub ca_g_g: ArrayBase<T, Ix2>,
+  pub ca_s_g: ArrayBase<T, Ix2>,
 }
 
 impl<T> Debug for GPeState<T>
@@ -377,6 +379,8 @@ where
       .field("s", &self.s)
       .field("w_g_g", &self.w_g_g)
       .field("w_s_g", &self.w_s_g)
+      .field("ca_g_g", &self.ca_g_g)
+      .field("ca_s_g", &self.ca_s_g)
       .finish()
   }
 }
@@ -388,12 +392,16 @@ where
   pub fn dydt(
     &self,
     p: &GPeParameters,
+    d_gpe: &ArrayView1<f64>,
+    d_stn: &ArrayView1<f64>,
     s_stn: &ArrayView1<f64>,
-    rho_pre_stn: &ArrayView1<f64>,
     i_ext: &ArrayView1<f64>,
     i_app: &ArrayView1<f64>,
   ) -> GPeState<OwnedRepr<f64>> {
-    let Self { v, n, h, r, ca, s, w_g_g, w_s_g } = self;
+    let Self { v, n, h, r, ca, s, w_g_g, w_s_g, ca_g_g, ca_s_g } = self;
+    let tau_ca = 7.;
+    let ca_pre = 0.99;
+    let ca_post = 1.55;
 
     let n_oo = x_oo(v, p.tht_n, p.sig_n);
     let m_oo = x_oo(v, p.tht_m, p.sig_m);
@@ -425,6 +433,12 @@ where
       s: p.alpha * h_syn_oo * (1. - s) - p.beta * s,
       w_g_g: ndarray::Array::zeros(w_g_g.raw_dim()), // TODO - no plasticity
       w_s_g: ndarray::Array::zeros(w_s_g.raw_dim()), // TODO - no plasticity
+      ca_g_g: -ca_g_g / tau_ca
+        + ca_pre * &d_gpe.insert_axis(ndarray::Axis(1))
+        + ca_post * &d_gpe.insert_axis(ndarray::Axis(0)),
+      ca_s_g: -ca_s_g / tau_ca
+        + ca_pre * &d_stn.insert_axis(ndarray::Axis(1))
+        + ca_post * &d_gpe.insert_axis(ndarray::Axis(0)),
     };
 
     dy
@@ -447,6 +461,8 @@ where
       s: &self.s + &rhs.s,
       w_g_g: &self.w_g_g + &rhs.w_g_g,
       w_s_g: &self.w_s_g + &rhs.w_s_g,
+      ca_g_g: &self.ca_g_g + &rhs.ca_g_g,
+      ca_s_g: &self.ca_s_g + &rhs.ca_s_g,
     }
   }
 }
@@ -499,6 +515,8 @@ where
       s: self * &rhs.s,
       w_g_g: self * &rhs.w_g_g,
       w_s_g: self * &rhs.w_s_g,
+      ca_g_g: self * &rhs.ca_g_g,
+      ca_s_g: self * &rhs.ca_s_g,
     }
   }
 }
@@ -543,6 +561,8 @@ pub struct GPeHistory {
   pub s: Array2<f64>,
   pub w_s_g: Array2<f64>,
   pub w_g_g: Array2<f64>,
+  pub ca_s_g: Array3<f64>,
+  pub ca_g_g: Array3<f64>,
   pub i_ext: Array2<f64>,
   pub i_app: Array2<f64>,
 }
@@ -557,6 +577,8 @@ impl GPeHistory {
     self.s.row_mut(it).assign(&y.s);
     self.w_s_g = y.w_s_g.clone();
     self.w_g_g = y.w_g_g.clone();
+    self.ca_s_g.slice_mut(s![it, .., ..]).assign(&y.ca_s_g);
+    self.ca_g_g.slice_mut(s![it, .., ..]).assign(&y.ca_g_g);
   }
 
   pub fn row<'a>(&'a self, it: usize) -> GPeState<ViewRepr<&'a f64>> {
@@ -569,6 +591,8 @@ impl GPeHistory {
       s: self.s.row(it),
       w_s_g: self.w_s_g.view(),
       w_g_g: self.w_g_g.view(),
+      ca_s_g: self.ca_s_g.slice(s![it, .., ..]),
+      ca_g_g: self.ca_g_g.slice(s![it, .., ..]),
     }
   }
 }
@@ -576,7 +600,20 @@ impl GPeHistory {
 impl GPeHistory {
   pub fn from_population(pop: GPePopulation) -> Self {
     let GPePopulation { v, n, h, r, ca, s, w_s_g, w_g_g, i_ext, i_app, .. } = pop;
-    Self { v, n, h, r, ca, s, w_s_g, w_g_g, i_ext, i_app }
+    Self {
+      n,
+      h,
+      r,
+      ca,
+      s,
+      i_ext,
+      i_app,
+      ca_g_g: Array3::zeros([v.shape()[0], w_g_g.shape()[0], w_g_g.shape()[1]]),
+      ca_s_g: Array3::zeros([v.shape()[0], w_s_g.shape()[0], w_s_g.shape()[1]]),
+      v,
+      w_s_g,
+      w_g_g,
+    }
   }
 
   pub fn into_compressed_polars_df(
@@ -598,6 +635,7 @@ impl GPeHistory {
     let step = step.trunc() as usize;
     let output_dt = step as f64 * idt;
     let srange = s![0..num_timesteps;step, ..];
+    let carange = s![0..num_timesteps;step, .., ..];
     let erange = s![0..num_timesteps * edge_resolution;step * edge_resolution, ..];
 
     let num_timesteps = self.v.slice(srange).nrows();
@@ -617,6 +655,8 @@ impl GPeHistory {
       array2_to_polars_column("s", self.s.slice(srange)),
       array2_to_polars_column("i_ext", self.i_ext.slice(erange)),
       array2_to_polars_column("i_app", self.i_app.slice(erange)),
+      array3_to_polars_column("ca_s_g", self.ca_s_g.slice(carange)),
+      array3_to_polars_column("ca_g_g", self.ca_g_g.slice(carange)),
     ])
     .expect("This shouldn't happend if the struct is valid")
   }
