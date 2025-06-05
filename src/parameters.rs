@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use struct_field_names_as_array::FieldNamesAsSlice;
 
 use crate::gpe::GPe;
+use crate::gpi::GPi;
 use crate::stn::STN;
 use crate::types::*;
 
@@ -90,6 +91,10 @@ pub struct STNParameters {
   pub min_dt_spike: f64,
   pub a_pre: f64,
   pub a_post: f64,
+
+  pub tau_ca: f64,
+  pub ca_pre: f64,
+  pub ca_post: f64,
 }
 
 #[derive(Serialize, Deserialize, Debug, FieldNamesAsSlice, Clone, Default)]
@@ -171,12 +176,101 @@ pub struct GPeParameters {
   pub min_dt_spike: f64,
   pub a_pre: f64,
   pub a_post: f64,
+  pub tau_ca: f64,
+  pub ca_pre: f64,
+  pub ca_post: f64,
+}
+
+#[derive(Serialize, Deserialize, Debug, FieldNamesAsSlice, Clone, Default)]
+#[allow(unused)]
+pub struct GPiParameters {
+  // Conductances
+  pub g_l: f64,   // nS/um^2
+  pub g_k: f64,   // nS/um^2
+  pub g_na: f64,  // nS/um^2
+  pub g_t: f64,   // nS/um^2
+  pub g_ca: f64,  // nS/um^2
+  pub g_ahp: f64, // nS/um^2
+  pub g_s_g: f64, // nS/um^2
+  pub g_g_g: f64, // nS/um^2
+
+  // Reversal potentials
+  pub v_l: f64,   // mV
+  pub v_k: f64,   // mV
+  pub v_na: f64,  // mV
+  pub v_ca: f64,  // mV
+  pub v_g_g: f64, // mV
+  pub v_s_g: f64, // mV
+
+  // Time constants
+  pub tau_h_1: f64, // ms
+  pub tau_n_1: f64, // ms
+  pub tau_h_0: f64, // ms
+  pub tau_n_0: f64, // ms
+  pub tau_r: f64,   // ms
+
+  pub phi_h: f64,
+  pub phi_n: f64,
+  pub phi_r: f64,
+
+  // Calcium parameters
+  pub k_1: f64,
+  pub k_ca: f64,
+  pub eps: f64, // ms^-1
+
+  // Threshold potentials
+  pub tht_m: f64, // mV
+  pub tht_h: f64, // mV
+  pub tht_n: f64, // mV
+  pub tht_r: f64, // mV
+  pub tht_a: f64, // mV
+  pub tht_s: f64, // mV
+
+  // Tau threshold potentials
+  pub tht_h_t: f64, // mV
+  pub tht_n_t: f64, // mV
+
+  // Synaptic threshold potentials
+  pub tht_g_h: f64, // mV
+  pub tht_g: f64,   // mV
+
+  // Synaptic rate constants
+  pub alpha: f64, // ms^-1
+  pub beta: f64,  // ms^-1
+
+  // Sigmoid slopes
+  pub sig_m: f64,
+  pub sig_h: f64,
+  pub sig_n: f64,
+  pub sig_r: f64,
+  pub sig_a: f64,
+  pub sig_s: f64,
+
+  // Tau sigmoid slopes
+  pub sig_h_t: f64,
+  pub sig_n_t: f64,
+
+  // Synaptic sigmoid slope
+  pub sig_g_h: f64,
+
+  // STDP
+  pub tau_pre: f64,
+  pub tau_post: f64,
+  pub tht_spike: f64,
+  pub min_dt_spike: f64,
+  pub a_pre: f64,
+  pub a_post: f64,
+  pub tau_ca: f64,
+  pub ca_pre: f64,
+  pub ca_post: f64,
 }
 
 impl Build<STN, Parameters> for STNParameters {}
 impl Build<GPe, Parameters> for GPeParameters {}
+impl Build<GPi, Parameters> for GPiParameters {}
 
 impl PostInit for GPeParameters {}
+impl PostInit for GPiParameters {}
 impl PostInit for STNParameters {
   fn post_init(self) -> Self {
     Self { b_const: 1. / (1. + f64::exp(-self.tht_b / self.sig_b)), ..self }
@@ -185,6 +279,7 @@ impl PostInit for STNParameters {
 
 pub type BuilderSTNParameters = Builder<STN, Parameters, STNParameters>;
 pub type BuilderGPeParameters = Builder<GPe, Parameters, GPeParameters>;
+pub type BuilderGPiParameters = Builder<GPi, Parameters, GPiParameters>;
 
 //#[cfg(test)]
 //mod parameters {

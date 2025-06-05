@@ -3,6 +3,7 @@ use std::ops::Add;
 use std::ops::Mul;
 
 use log::debug;
+use ndarray::azip;
 use ndarray::Array3;
 use ndarray::{s, Array1, Array2, ArrayView1, Zip};
 use struct_field_names_as_array::FieldNamesAsSlice;
@@ -17,6 +18,8 @@ pub struct STN;
 impl Neuron for STN {
   const TYPE: &'static str = "STN";
 }
+
+pub type STNConfig = NeuronConfig<STN, STNParameters, STNPopulationBoundryConditions>;
 
 #[derive(FieldNamesAsSlice, Debug, Default)]
 pub struct STNPopulationBoundryConditions {
@@ -75,7 +78,7 @@ impl Builder<STN, Boundary, STNPopulationBoundryConditions> {
 
     let i_ext_f =
       toml_py_function_qualname_to_py_object(self.map.get("i_ext").expect("default should be set by caller"));
-    let i_ext = vectorize_i_ext_py(&i_ext_f, dt, total_t * (edge_resolution as f64), stn_count);
+    let i_ext = vectorize_i_ext_py(&i_ext_f, dt / (edge_resolution as f64), total_t, stn_count);
     assert_eq!(i_ext.shape()[1], stn_count);
     debug!("STN I_ext vectorized to\n{i_ext}");
 
@@ -329,6 +332,32 @@ pub struct STNHistory {
 }
 
 impl STNHistory {
+  pub fn new(num_timesteps: usize, stn_count: usize, gpe_count: usize, edge_resolution: usize) -> Self {
+    Self {
+      v: Array2::zeros((num_timesteps, stn_count)),
+      n: Array2::zeros((num_timesteps, stn_count)),
+      h: Array2::zeros((num_timesteps, stn_count)),
+      r: Array2::zeros((num_timesteps, stn_count)),
+      ca: Array2::zeros((num_timesteps, stn_count)),
+      s: Array2::zeros((num_timesteps, stn_count)),
+      w_g_s: Array2::zeros((gpe_count, stn_count)),
+      ca_g_s: Array3::zeros((num_timesteps * edge_resolution, gpe_count, stn_count)),
+      i_ext: Array2::zeros((num_timesteps * edge_resolution, stn_count)),
+    }
+  }
+
+  pub fn with_bcs(mut self, bc: STNPopulationBoundryConditions) -> Self {
+    self.v.row_mut(0).assign(&bc.v);
+    self.n.row_mut(0).assign(&bc.n);
+    self.h.row_mut(0).assign(&bc.h);
+    self.r.row_mut(0).assign(&bc.r);
+    self.ca.row_mut(0).assign(&bc.ca);
+    self.s.row_mut(0).assign(&bc.s);
+    self.w_g_s.assign(&bc.w_g_s);
+    self.i_ext.assign(&bc.i_ext);
+    self
+  }
+
   pub fn insert(&mut self, it: usize, y: &STNState<OwnedRepr<f64>>) {
     self.v.row_mut(it).assign(&y.v);
     self.n.row_mut(it).assign(&y.n);
@@ -444,8 +473,6 @@ where
       } else {
         *d = 0.;
       }
-      //     *d = (v > 0. && *dt_spike > 2.) as u8 as f64;
-      //     *dt_spike *= (v != 1.) as u8 as f64;
     });
   }
 }
@@ -479,9 +506,21 @@ where
     i_ext: &ArrayView1<f64>,
   ) -> STNState<OwnedRepr<T::Elem>> {
     let Self { v, n, h, r, ca, s, w_g_s, ca_g_s } = self;
-    let tau_ca = 7.;
-    let ca_pre = 0.99;
-    let ca_post = 1.55;
+    let theta_d: f64 = 0.06;
+    let theta_p: f64 = 0.09;
+    let eta_d: f64 = 0.001;
+    let eta_p: f64 = 0.00075;
+    let f_d: f64 = 0.42;
+    let f_p: f64 = 2.25;
+
+    let etas = [0., eta_d, eta_p];
+    let fs = [0., f_d, f_p];
+
+    let mut dw_g_s = Array2::<f64>::zeros(w_g_s.raw_dim());
+    azip!((dw in &mut dw_g_s, w in w_g_s, &ca in ca_g_s) {
+      let i = (ca > theta_d) as usize + (ca > theta_p) as usize;
+      *dw = etas[i] * (fs[i] - w);
+    });
 
     let n_oo = x_oo(v, p.tht_n, p.sig_n);
     let m_oo = x_oo(v, p.tht_m, p.sig_m);
@@ -511,10 +550,10 @@ where
       r: p.phi_r * (r_oo - r) / tau_r,
       ca: p.eps * ((-i_ca - i_t) - p.k_ca * ca),
       s: p.alpha * h_syn_oo * (1. - s) - p.beta * s,
-      w_g_s: ndarray::Array::zeros(w_g_s.raw_dim()), // TODO - no plasticity
-      ca_g_s: -ca_g_s / tau_ca
-        + ca_pre * &d_gpe.insert_axis(ndarray::Axis(1))
-        + ca_post * &d_stn.insert_axis(ndarray::Axis(0)),
+      w_g_s: dw_g_s,
+      ca_g_s: -ca_g_s / p.tau_ca
+        + p.ca_pre * &d_gpe.insert_axis(ndarray::Axis(1))
+        + p.ca_post * &d_stn.insert_axis(ndarray::Axis(0)),
     };
 
     dy

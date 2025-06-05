@@ -51,6 +51,9 @@ v_k = -80.0
 v_l = -55.0
 v_na = 55.0
 v_s_g = 0.0
+tau_ca = 7.0
+ca_pre = 0.99
+ca_post = 1.55
 
 [STN]
 a_post = 0.0
@@ -109,3 +112,6 @@ v_g_s = -100.0
 v_k = -80.0
 v_l = -60.0
 v_na = 55.0
+tau_ca = 7.0
+ca_pre = 0.99
+ca_post = 1.55

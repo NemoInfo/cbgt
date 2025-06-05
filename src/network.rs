@@ -4,16 +4,16 @@ use std::sync::Arc;
 
 use env_logger::fmt::Formatter;
 use log::debug;
-use ndarray::{Array1, ArrayView1};
 use pyo3::{prelude::*, types::PyDict};
 use std::io::Write;
 
-use crate::gpe::{BuilderGPeBoundary, GPePopulation};
-use crate::stn::{BuilderSTNBoundary, DiracDeltaState, STNPopulation};
-use crate::{
-  format_number, write_boundary_file, write_parameter_file, write_temp_pyf_file, Boundary, BuilderGPeParameters,
-  BuilderSTNParameters, GPeConfig, NeuronData, STNConfig, SpinBarrier, PYF_FILE_NAME,
-};
+use crate::gpe::*;
+use crate::gpi::*;
+use crate::parameters::*;
+use crate::stn::*;
+use crate::types::{Boundary, NeuronData};
+use crate::util::{format_number, write_boundary_file, write_parameter_file, write_temp_pyf_file, SpinBarrier};
+use crate::PYF_FILE_NAME;
 use crate::{gpe::GPeHistory, GPeParameters};
 use crate::{stn::STNHistory, STNParameters};
 
@@ -27,6 +27,8 @@ pub struct Network {
   pub stn_parameters: STNParameters,
   pub gpe_states: GPeHistory,
   pub gpe_parameters: GPeParameters,
+  pub gpi_states: GPiHistory,
+  pub gpi_parameters: GPiParameters,
 }
 
 impl Network {
@@ -57,13 +59,11 @@ impl Network {
     let d_stn_ref = unsafe { ndarray::ArrayView1::from_shape_ptr(dd_stn.d.len(), dd_stn.d.as_ptr()) };
     let mut dd_gpe = DiracDeltaState::new(gpe.v.shape()[1]);
     let d_gpe_ref = unsafe { ndarray::ArrayView1::from_shape_ptr(dd_gpe.d.len(), dd_gpe.d.as_ptr()) };
-    let mut store1 = ndarray::Array2::<f64>::zeros(stn.v.raw_dim());
-    let mut store2 = ndarray::Array2::<f64>::zeros(stn.v.raw_dim());
 
     let barrier1 = spin_barrier.clone();
     let barrier2 = spin_barrier;
-    let store = crossbeam::thread::scope(|s| {
-      let handle1 = s.spawn(move |_| {
+    let _store = crossbeam::thread::scope(|s| {
+      let stn_thread = s.spawn(move |_| {
         for it in 0..num_timesteps - 1 {
           let edge_it = it * 2;
           let yp = &stn.row(it);
@@ -74,12 +74,10 @@ impl Network {
           let dy = yp.dydt(&stn_p, &d_stn_ref, &d_gpe_ref, &s_gpe_ref, &stn.i_ext.row(edge_it));
           let yn = yp + dy * dt;
           stn.insert(it + 1, &yn);
-          store1.row_mut(it).assign(&dd_stn.dt_spike);
         }
-        store1
       });
 
-      let handle2 = s.spawn(move |_| {
+      let gpe_thread = s.spawn(move |_| {
         for it in 0..num_timesteps - 1 {
           let edge_it = it * 2;
           let yp = &gpe.row(it);
@@ -91,20 +89,30 @@ impl Network {
             yp.dydt(&gpe_p, &d_gpe_ref, &d_stn_ref, &s_stn_ref, &gpe.i_ext.row(edge_it), &gpe.i_app.row(edge_it));
           let yn = yp + dy * dt;
           gpe.insert(it + 1, &yn);
-          store2.row_mut(it).assign(&dd_gpe.dt_spike);
         }
-        store2
       });
 
-      (handle1.join().unwrap_or_else(|e| panic!("{e:?}")), handle2.join().unwrap_or_else(|e| panic!("{e:?}")))
+      //     let gpi_thread = s.spawn(move |_| {
+      //       for it in 0..num_timesteps - 1 {
+      //         let edge_it = it * 2;
+      //         let yp = &gpi.row(it);
+      //         barrier2.sym_sync_call(|| {
+      //           s_gpi_mut.assign(&yp.s);
+      //           dd_gpi.update(&yp.v, dt);
+      //         });
+      //         let dy =
+      //           yp.dydt(&gpi_p, &d_gpi_ref, &d_stn_ref, &s_stn_ref, &gpi.i_ext.row(edge_it), &gpi.i_app.row(edge_it));
+      //         let yn = yp + dy * dt;
+      //         gpi.insert(it + 1, &yn);
+      //       }
+      //     });
+
+      stn_thread.join().unwrap();
+      gpe_thread.join().unwrap();
     })
     .unwrap();
-
-    self.stn_states.n = store.0;
-    self.gpe_states.n = store.1;
   }
 
-  #[allow(unused)]
   fn run_rk4(&mut self) {
     let num_timesteps: usize = (self.total_t / self.dt) as usize;
 
@@ -112,82 +120,140 @@ impl Network {
 
     let stn_p = self.stn_parameters.clone();
     let gpe_p = self.gpe_parameters.clone();
-
-    let foo = Array1::zeros(10);
-    let rho_pre_gpe: &ArrayView1<f64> = &foo.view();
-    let rho_pre_stn: &ArrayView1<f64> = &foo.view();
-
+    let gpi_p = self.gpi_parameters.clone();
     let dt = self.dt;
 
     let stn = &mut self.stn_states;
     let gpe = &mut self.gpe_states;
+    let gpi = &mut self.gpi_states;
+
+    let mut dd_stn = DiracDeltaState::new(stn.v.shape()[1]);
+    let d_stn_ref = unsafe { ndarray::ArrayView1::from_shape_ptr(dd_stn.d.len(), dd_stn.d.as_ptr()) };
+    let mut dd_gpe = DiracDeltaState::new(gpe.v.shape()[1]);
+    let d_gpe_ref = unsafe { ndarray::ArrayView1::from_shape_ptr(dd_gpe.d.len(), dd_gpe.d.as_ptr()) };
+    let mut dd_gpi = DiracDeltaState::new(gpi.v.shape()[1]);
+    let d_gpi_ref = unsafe { ndarray::ArrayView1::from_shape_ptr(dd_gpi.d.len(), dd_gpi.d.as_ptr()) };
 
     let mut s_gpe_shared = gpe.s.row(0).to_owned();
     let s_gpe_ref = unsafe { ndarray::ArrayView1::from_shape_ptr(s_gpe_shared.len(), s_gpe_shared.as_ptr()) };
     let mut s_gpe_mut =
       unsafe { ndarray::ArrayViewMut1::from_shape_ptr(s_gpe_shared.len(), s_gpe_shared.as_mut_ptr()) };
+    let mut s_gpi_shared = gpi.s.row(0).to_owned();
+    let s_gpi_ref = unsafe { ndarray::ArrayView1::from_shape_ptr(s_gpi_shared.len(), s_gpi_shared.as_ptr()) };
+    let mut s_gpi_mut =
+      unsafe { ndarray::ArrayViewMut1::from_shape_ptr(s_gpi_shared.len(), s_gpi_shared.as_mut_ptr()) };
     let mut s_stn_shared = stn.s.row(0).to_owned();
     let s_stn_ref = unsafe { ndarray::ArrayView1::from_shape_ptr(s_stn_shared.len(), s_stn_shared.as_ptr()) };
     let mut s_stn_mut =
       unsafe { ndarray::ArrayViewMut1::from_shape_ptr(s_stn_shared.len(), s_stn_shared.as_mut_ptr()) };
 
-    let spin_barrier = Arc::new(SpinBarrier::new(2));
-    let barrier1 = spin_barrier.clone();
-    let barrier2 = spin_barrier.clone();
+    let spin_barrier = Arc::new(SpinBarrier::new(3));
+    let stn_barrier = spin_barrier.clone();
+    let gpe_barrier = spin_barrier.clone();
+    let gpi_barrier = spin_barrier.clone();
     _ = crossbeam::thread::scope(|s| {
-      let handle1 = s.spawn(move |_| {
+      let stn_thread = s.spawn(move |_| {
         for it in 0..num_timesteps - 1 {
-          //         let edge_it = it * 2;
-          //         let yp = &stn.row(it);
-          //         barrier1.sym_sync_call(|| s_stn_mut.assign(&yp.s));
-          //         let k1 = yp.dydt(&stn_p, &s_gpe_ref, rho_pre_gpe, &stn.i_ext.row(edge_it));
-          //         let k2 = (yp + &(dt / 2. * &k1)).dydt(&stn_p, &s_gpe_ref, rho_pre_gpe, &stn.i_ext.row(edge_it + 1));
-          //         let k3 = (yp + &(dt / 2. * &k2)).dydt(&stn_p, &s_gpe_ref, rho_pre_gpe, &stn.i_ext.row(edge_it + 1));
-          //         let k4 = (yp + &(dt * &k3)).dydt(&stn_p, &s_gpe_ref, rho_pre_gpe, &stn.i_ext.row(edge_it + 2));
-          //         let yn = yp + dt / 6. * (k1 + 2. * k2 + 2. * k3 + k4);
-          //         stn.insert(it + 1, &yn);
+          let edge_it = it * 2;
+          let yp = &stn.row(it);
+          stn_barrier.sym_sync_call(|| {
+            s_stn_mut.assign(&yp.s);
+            dd_stn.update(&yp.v, dt);
+          });
+          let k1 = yp.dydt(&stn_p, &d_stn_ref, &d_gpe_ref, &s_gpe_ref, &stn.i_ext.row(edge_it));
+          let k2 =
+            (yp + &(dt / 2. * &k1)).dydt(&stn_p, &d_stn_ref, &d_gpe_ref, &s_gpe_ref, &stn.i_ext.row(edge_it + 1));
+          let k3 =
+            (yp + &(dt / 2. * &k2)).dydt(&stn_p, &d_stn_ref, &d_gpe_ref, &s_gpe_ref, &stn.i_ext.row(edge_it + 1));
+          let k4 = (yp + &(dt * &k3)).dydt(&stn_p, &d_stn_ref, &d_gpe_ref, &s_gpe_ref, &stn.i_ext.row(edge_it + 2));
+          let yn = yp + dt / 6. * (k1 + 2. * k2 + 2. * k3 + k4);
+          stn.insert(it + 1, &yn);
         }
       });
 
-      let handle2 = s.spawn(move |_| {
+      let gpe_thread = s.spawn(move |_| {
         for it in 0..num_timesteps - 1 {
-          //         let edge_it = it * 2;
-          //         let yp = &gpe.row(it);
-          //         barrier2.sym_sync_call(|| s_gpe_mut.assign(&yp.s));
-          //         let k1 = yp.dydt(&gpe_p, &s_stn_ref, rho_pre_stn, &gpe.i_ext.row(edge_it), &gpe.i_app.row(edge_it));
-          //         let k2 = (yp + &(dt / 2. * &k1)).dydt(
-          //           &gpe_p,
-          //           &s_stn_ref,
-          //           rho_pre_stn,
-          //           &gpe.i_ext.row(edge_it + 1),
-          //           &gpe.i_app.row(edge_it + 1),
-          //         );
-          //         let k3 = (yp + &(dt / 2. * &k2)).dydt(
-          //           &gpe_p,
-          //           &s_stn_ref,
-          //           rho_pre_stn,
-          //           &gpe.i_ext.row(edge_it + 1),
-          //           &gpe.i_app.row(edge_it + 1),
-          //         );
-          //         let k4 = (yp + &(dt * &k3)).dydt(
-          //           &gpe_p,
-          //           &s_stn_ref,
-          //           rho_pre_stn,
-          //           &gpe.i_ext.row(edge_it + 2),
-          //           &gpe.i_app.row(edge_it + 2),
-          //         );
-          //         let yn = yp + dt / 6. * &(k1 + 2. * k2 + 2. * k3 + k4);
-          //         gpe.insert(it + 1, &yn);
+          let edge_it = it * 2;
+          let yp = &gpe.row(it);
+          gpe_barrier.sym_sync_call(|| {
+            s_gpe_mut.assign(&yp.s);
+            dd_gpe.update(&yp.v, dt);
+          });
+          let k1 =
+            yp.dydt(&gpe_p, &d_gpe_ref, &d_stn_ref, &s_stn_ref, &gpe.i_ext.row(edge_it), &gpe.i_app.row(edge_it));
+          let k2 = (yp + &(dt / 2. * &k1)).dydt(
+            &gpe_p,
+            &d_gpe_ref,
+            &d_stn_ref,
+            &s_stn_ref,
+            &gpe.i_ext.row(edge_it + 1),
+            &gpe.i_app.row(edge_it + 1),
+          );
+          let k3 = (yp + &(dt / 2. * &k2)).dydt(
+            &gpe_p,
+            &d_gpe_ref,
+            &d_stn_ref,
+            &s_stn_ref,
+            &gpe.i_ext.row(edge_it + 1),
+            &gpe.i_app.row(edge_it + 1),
+          );
+          let k4 = (yp + &(dt * &k3)).dydt(
+            &gpe_p,
+            &d_gpe_ref,
+            &d_stn_ref,
+            &s_stn_ref,
+            &gpe.i_ext.row(edge_it + 2),
+            &gpe.i_app.row(edge_it + 2),
+          );
+          let yn = yp + dt / 6. * &(k1 + 2. * k2 + 2. * k3 + k4);
+          gpe.insert(it + 1, &yn);
         }
       });
 
-      handle1.join().unwrap();
-      handle2.join().unwrap();
+      let gpi_thread = s.spawn(move |_| {
+        for it in 0..num_timesteps - 1 {
+          let edge_it = it * 2;
+          let yp = &gpi.row(it);
+          gpi_barrier.sym_sync_call(|| {
+            s_gpi_mut.assign(&yp.s);
+            dd_gpi.update(&yp.v, dt);
+          });
+          let k1 =
+            yp.dydt(&gpi_p, &d_gpi_ref, &d_stn_ref, &s_stn_ref, &gpi.i_ext.row(edge_it), &gpi.i_app.row(edge_it));
+          let k2 = (yp + &(dt / 2. * &k1)).dydt(
+            &gpi_p,
+            &d_gpi_ref,
+            &d_stn_ref,
+            &s_stn_ref,
+            &gpi.i_ext.row(edge_it + 1),
+            &gpi.i_app.row(edge_it + 1),
+          );
+          let k3 = (yp + &(dt / 2. * &k2)).dydt(
+            &gpi_p,
+            &d_gpi_ref,
+            &d_stn_ref,
+            &s_stn_ref,
+            &gpi.i_ext.row(edge_it + 1),
+            &gpi.i_app.row(edge_it + 1),
+          );
+          let k4 = (yp + &(dt * &k3)).dydt(
+            &gpi_p,
+            &d_gpi_ref,
+            &d_stn_ref,
+            &s_stn_ref,
+            &gpi.i_ext.row(edge_it + 2),
+            &gpi.i_app.row(edge_it + 2),
+          );
+          let yn = yp + dt / 6. * &(k1 + 2. * k2 + 2. * k3 + k4);
+          gpi.insert(it + 1, &yn);
+        }
+      });
+
+      stn_thread.join().unwrap();
+      gpe_thread.join().unwrap();
+      gpi_thread.join().unwrap();
     })
     .unwrap();
-
-    //  drop(log_tx);
-    //  logger_handle.join().unwrap();
   }
 }
 
@@ -220,10 +286,14 @@ impl Network {
 
     let mut stn_kw_config = STNConfig::new();
     let mut gpe_kw_config = GPeConfig::new();
+    let mut gpi_kw_config = GPiConfig::new();
 
     if let Some(kwds) = kwds {
       for (key, val) in kwds {
-        if !(stn_kw_config.update_from_py(&key, &val) || gpe_kw_config.update_from_py(&key, &val)) {
+        if !(stn_kw_config.update_from_py(&key, &val)
+          || gpe_kw_config.update_from_py(&key, &val)
+          || gpi_kw_config.update_from_py(&key, &val))
+        {
           panic!("Unexpected key word argument {}", key);
         }
       }
@@ -233,46 +303,53 @@ impl Network {
       Some((qname, src)) => vec![(qname.into(), src.into())],
       None => vec![],
     });
+
     let (stn_kw_params, stn_kw_bcs) = stn_kw_config.into_maps(&mut pyf_src);
     let (gpe_kw_params, gpe_kw_bcs) = gpe_kw_config.into_maps(&mut pyf_src);
+    let (gpi_kw_params, gpi_kw_bcs) = gpi_kw_config.into_maps(&mut pyf_src);
 
     let stn_parameters = BuilderSTNParameters::build(stn_kw_params, parameters_file, experiment, use_default).finish();
     let gpe_parameters = BuilderGPeParameters::build(gpe_kw_params, parameters_file, experiment, use_default).finish();
+    let gpi_parameters = BuilderGPiParameters::build(gpi_kw_params, parameters_file, experiment, use_default).finish();
 
     log::debug!("{:?}", stn_kw_bcs);
     let mut stn_bcs_builder = BuilderSTNBoundary::build(stn_kw_bcs, boundry_ic_file, experiment, use_default);
     let mut gpe_bcs_builder = BuilderGPeBoundary::build(gpe_kw_bcs, boundry_ic_file, experiment, use_default);
+    let mut gpi_bcs_builder = BuilderGPiBoundary::build(gpi_kw_bcs, boundry_ic_file, experiment, use_default);
 
     log::debug!("{:?}", stn_bcs_builder);
     let stn_count = stn_bcs_builder.get_count().expect("stn_count not found");
     let gpe_count = gpe_bcs_builder.get_count().expect("gpe_count not found");
+    let gpi_count = gpi_bcs_builder.get_count().expect("gpi_count not found");
 
     stn_bcs_builder.extends_pyf_src(&mut pyf_src);
     gpe_bcs_builder.extends_pyf_src(&mut pyf_src);
+    gpi_bcs_builder.extends_pyf_src(&mut pyf_src);
 
     let stn_qual_names = stn_bcs_builder.get_callable_qnames();
     let gpe_qual_names = gpe_bcs_builder.get_callable_qnames();
+    let gpi_qual_names = gpi_bcs_builder.get_callable_qnames();
     log::debug!("{:?}", pyf_src);
     let pyf_file = write_temp_pyf_file(pyf_src);
 
     let num_timesteps: usize = (total_t / dt) as usize;
     let stn_bcs = stn_bcs_builder.finish(stn_count, gpe_count, dt, total_t, 2);
     let gpe_bcs = gpe_bcs_builder.finish(gpe_count, stn_count, dt, total_t, 2);
+    let gpi_bcs = gpi_bcs_builder.finish(gpi_count, stn_count, dt, total_t, 2);
 
     if let Some(save_dir) = &save_dir {
       write_parameter_file(&stn_parameters, &gpe_parameters, save_dir);
-      write_boundary_file(&stn_bcs, &gpe_bcs, save_dir, &stn_qual_names, &gpe_qual_names);
+      write_boundary_file(&stn_bcs, &gpe_bcs, &gpi_bcs, save_dir, &stn_qual_names, &gpe_qual_names, &gpi_qual_names);
       std::fs::copy(&pyf_file, format!("{save_dir}/{PYF_FILE_NAME}.py")).unwrap();
     }
 
-    let stn_population = STNPopulation::new(num_timesteps, stn_count, gpe_count, 2).with_bcs(stn_bcs);
-    let gpe_population = GPePopulation::new(num_timesteps, stn_count, gpe_count, 2).with_bcs(gpe_bcs);
-    let stn_states = STNHistory::from_population(stn_population);
-    let gpe_states = GPeHistory::from_population(gpe_population);
+    let stn_states = STNHistory::new(num_timesteps, stn_count, gpe_count, 2).with_bcs(stn_bcs);
+    let gpe_states = GPeHistory::new(num_timesteps, gpe_count, stn_count, 2).with_bcs(gpe_bcs);
+    let gpi_states = GPiHistory::new(num_timesteps, gpi_count, stn_count, 2).with_bcs(gpi_bcs);
 
     std::fs::remove_file(pyf_file).expect("File was just created, it should exist.");
 
-    Self { dt, total_t, stn_states, stn_parameters, gpe_states, gpe_parameters }
+    Self { dt, total_t, stn_states, stn_parameters, gpe_states, gpe_parameters, gpi_states, gpi_parameters }
   }
 
   #[pyo3(name = "run_euler")]
@@ -289,10 +366,12 @@ impl Network {
   fn into_map_polars_dataframe_py(&self, py: Python, dt: Option<f64>) -> Py<PyDict> {
     let stn = self.stn_states.into_compressed_polars_df(self.dt, dt, 2);
     let gpe = self.gpe_states.into_compressed_polars_df(self.dt, dt, 2);
+    let gpi = self.gpi_states.into_compressed_polars_df(self.dt, dt, 2);
 
     let dict = PyDict::new(py);
     dict.set_item("stn", pyo3_polars::PyDataFrame(stn)).expect("Could not add insert STN Polars DataFrame");
     dict.set_item("gpe", pyo3_polars::PyDataFrame(gpe)).expect("Could not add insert STN Polars DataFrame");
+    dict.set_item("gpi", pyo3_polars::PyDataFrame(gpi)).expect("Could not add insert STN Polars DataFrame");
 
     dict.into()
   }

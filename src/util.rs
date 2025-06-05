@@ -8,10 +8,13 @@ use std::{
   sync::atomic::{AtomicUsize, Ordering},
 };
 
-use crate::{
-  gpe::GPePopulationBoundryConditions, stn::STNPopulationBoundryConditions, types::Parameters, Boundary, GPeParameters,
-  NeuronData, STNParameters, ToToml, PYF_FILE_NAME, TMP_PYF_FILE_NAME, TMP_PYF_FILE_PATH,
-};
+use crate::gpe::GPePopulationBoundryConditions;
+use crate::gpi::GPiPopulationBoundryConditions;
+use crate::stn::STNPopulationBoundryConditions;
+
+use crate::parameters::*;
+use crate::types::{Boundary, NeuronData, Parameters, ToToml};
+use crate::{PYF_FILE_NAME, TMP_PYF_FILE_NAME, TMP_PYF_FILE_PATH};
 
 pub fn x_inf<D: Dimension>(v: &ArrayView<f64, D>, tht_x: f64, sig_x: f64) -> Array<f64, D> {
   1. / (1. + ((tht_x - v) / sig_x).exp())
@@ -342,9 +345,11 @@ pub fn write_parameter_file(stn: &STNParameters, gpe: &GPeParameters, dir: &str)
 pub fn write_boundary_file(
   stn: &STNPopulationBoundryConditions,
   gpe: &GPePopulationBoundryConditions,
+  gpi: &GPiPopulationBoundryConditions,
   dir: &str,
   stn_qual_names: &Vec<String>,
   gpe_qual_names: &Vec<String>,
+  gpi_qual_names: &Vec<String>,
 ) {
   let stn_qual_names = stn_qual_names
     .iter()
@@ -362,9 +367,18 @@ pub fn write_boundary_file(
     panic!("Did not get expected number of qualified python functions");
   };
 
+  let gpi_qual_names = gpi_qual_names
+    .iter()
+    .map(|x| format!("{dir}/{PYF_FILE_NAME}.{}", x.rsplit_once(".").unwrap().1))
+    .collect::<Vec<_>>();
+  let [gpi_i_ext_qual_name, gpi_i_app_qual_name] = gpi_qual_names.as_slice() else {
+    panic!("Did not get expected number of qualified python functions");
+  };
+
   let bc_map = toml::value::Table::from_iter([
     ("STN".to_owned(), stn.to_toml(&stn_i_ext_qual_name)),
     ("GPe".to_owned(), gpe.to_toml(&gpe_i_ext_qual_name, &gpe_i_app_qual_name)),
+    ("GPi".to_owned(), gpi.to_toml(&gpi_i_ext_qual_name, &gpi_i_app_qual_name)),
   ]);
 
   let file_path: std::path::PathBuf = format!("{dir}/{}", Boundary::EXP_FILE).into();

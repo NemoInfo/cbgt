@@ -1,4 +1,6 @@
+use pyo3::prelude::*;
 use std::collections::HashMap;
+use struct_field_names_as_array::FieldNamesAsSlice;
 
 use crate::{util::*, PYF_FILE_NAME, TMP_PYF_FILE_NAME, TMP_PYF_FILE_PATH};
 
@@ -133,10 +135,16 @@ where
   T: Build<N, Boundary>,
 {
   pub fn get_count(&self) -> Option<usize> {
-    self
-      .map
-      .get("count".into())
-      .map(|x| x.as_integer().expect(&format!("{}_count must be usize", N::TYPE.to_lowercase())) as usize)
+    self.map.get("count".into()).map(|x| {
+      x.as_integer().map_or_else(
+        || {
+          let x = x.as_float().expect(&format!("{}_count must be an unsigned integer", N::TYPE.to_lowercase()));
+          assert!(x.fract() == 0., "{}_count must be an unsigned integer", N::TYPE.to_lowercase());
+          x as usize
+        },
+        |x| x as usize,
+      )
+    })
   }
 
   pub fn extends_pyf_src(&mut self, pyf_src: &mut HashMap<String, String>) {
@@ -199,5 +207,69 @@ impl<N: Neuron, T: Build<N, Parameters> + serde::Serialize> ToToml<N, Parameters
     let table = toml::Value::try_from(&self).unwrap();
     assert!(table.is_table());
     table
+  }
+}
+
+pub struct NeuronConfig<N, ParameterBuilder, BoundaryBuilder>
+where
+  N: Neuron,
+  ParameterBuilder: Build<N, Parameters> + FieldNamesAsSlice,
+  BoundaryBuilder: Build<N, Boundary> + FieldNamesAsSlice,
+{
+  par_map: toml::map::Map<String, toml::Value>,
+  bcs_map: toml::map::Map<String, toml::Value>,
+  pyf_map: HashMap<String, String>,
+  _marker: std::marker::PhantomData<(N, ParameterBuilder, BoundaryBuilder)>,
+}
+// TODO: Test some invalid input
+
+impl<N, ParameterBuilder, BoundaryBuilder> NeuronConfig<N, ParameterBuilder, BoundaryBuilder>
+where
+  N: Neuron,
+  ParameterBuilder: Build<N, Parameters> + FieldNamesAsSlice,
+  BoundaryBuilder: Build<N, Boundary> + FieldNamesAsSlice,
+{
+  pub fn new() -> Self {
+    Self {
+      par_map: toml::map::Map::new(),
+      bcs_map: toml::map::Map::new(),
+      pyf_map: HashMap::new(),
+      _marker: std::marker::PhantomData,
+    }
+  }
+
+  pub fn update_from_py(&mut self, key: &Bound<'_, PyAny>, value: &Bound<'_, PyAny>) -> bool {
+    if let Some(key) = key.to_string().strip_prefix(&format!("{}_", N::TYPE.to_lowercase())) {
+      if ParameterBuilder::FIELD_NAMES_AS_SLICE.contains(&key) {
+        let kv = parse_toml_value(key, &format!("{value:?}")).as_table().unwrap().clone();
+        self.par_map.extend(kv);
+        return true;
+      } else if BoundaryBuilder::FIELD_NAMES_AS_SLICE.contains(&key) {
+        let kv = self.parse_toml_callable_py(key, value);
+        self.bcs_map.extend(kv);
+        return true;
+      }
+    }
+    false
+  }
+
+  pub fn parse_toml_callable_py(&mut self, key: &str, value: &Bound<'_, PyAny>) -> toml::map::Map<String, toml::Value> {
+    if BoundaryBuilder::PYTHON_CALLABLE_FIELD_NAMES.contains(&key) {
+      let (src, name) =
+        get_py_function_source_and_name(value.as_unbound()).expect("Could not get source and name of function");
+      let qname = format!("{TMP_PYF_FILE_PATH}/{TMP_PYF_FILE_NAME}.{name}");
+      self.pyf_map.insert(qname.clone(), src);
+      toml::map::Map::from_iter([(key.into(), toml::Value::String(qname))])
+    } else {
+      parse_toml_value(key, &format!("{value:?}")).try_into().unwrap()
+    }
+  }
+
+  pub fn into_maps(
+    self,
+    pyf_src: &mut HashMap<String, String>,
+  ) -> (toml::map::Map<String, toml::Value>, toml::map::Map<String, toml::Value>) {
+    pyf_src.extend(self.pyf_map);
+    (self.par_map, self.bcs_map)
   }
 }

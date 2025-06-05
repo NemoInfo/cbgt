@@ -6,22 +6,22 @@ use ndarray::{s, Array1, Array2, Array3, ArrayView1, Ix2, OwnedRepr, ViewRepr};
 use ndarray::{ArrayBase, Ix1};
 use struct_field_names_as_array::FieldNamesAsSlice;
 
-use crate::parameters::GPeParameters;
+use crate::parameters::GPiParameters;
 use crate::stn::{_tau_x, x_oo};
 use crate::types::*;
 use crate::util::*;
 
 #[derive(Default)]
-pub struct GPe;
+pub struct GPi;
 
-impl Neuron for GPe {
-  const TYPE: &'static str = "GPe";
+impl Neuron for GPi {
+  const TYPE: &'static str = "GPi";
 }
 
-pub type GPeConfig = NeuronConfig<GPe, GPeParameters, GPePopulationBoundryConditions>;
+pub type GPiConfig = NeuronConfig<GPi, GPiParameters, GPiPopulationBoundryConditions>;
 
 #[derive(FieldNamesAsSlice, Debug, Default)]
-pub struct GPePopulationBoundryConditions {
+pub struct GPiPopulationBoundryConditions {
   pub count: usize,
   // State
   pub v: Array1<f64>,
@@ -40,84 +40,84 @@ pub struct GPePopulationBoundryConditions {
   pub c_s_g: Array2<f64>,
 }
 
-impl Build<GPe, Boundary> for GPePopulationBoundryConditions {
+impl Build<GPi, Boundary> for GPiPopulationBoundryConditions {
   const PYTHON_CALLABLE_FIELD_NAMES: &[&'static str] = &["i_ext", "i_app"];
 }
 
-pub type BuilderGPeBoundary = Builder<GPe, Boundary, GPePopulationBoundryConditions>;
+pub type BuilderGPiBoundary = Builder<GPi, Boundary, GPiPopulationBoundryConditions>;
 
-impl BuilderGPeBoundary {
+impl BuilderGPiBoundary {
   pub fn finish(
     self,
-    gpe_count: usize,
+    gpi_count: usize,
     stn_count: usize,
     dt: f64,
     total_t: f64,
     edge_resolution: u8,
-  ) -> GPePopulationBoundryConditions {
-    let pbc = Array1::zeros(gpe_count);
+  ) -> GPiPopulationBoundryConditions {
+    let pbc = Array1::zeros(gpi_count);
 
     let v =
       self.map.get("v").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim v"));
-    assert_eq!(v.len(), gpe_count);
+    assert_eq!(v.len(), gpi_count);
     let n =
       self.map.get("n").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim n"));
-    assert_eq!(n.len(), gpe_count);
+    assert_eq!(n.len(), gpi_count);
     let h =
       self.map.get("h").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim h"));
-    assert_eq!(h.len(), gpe_count);
+    assert_eq!(h.len(), gpi_count);
     let r =
       self.map.get("r").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim r"));
-    assert_eq!(r.len(), gpe_count);
+    assert_eq!(r.len(), gpi_count);
     let ca =
       self.map.get("ca").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim ca"));
-    assert_eq!(ca.len(), gpe_count);
+    assert_eq!(ca.len(), gpi_count);
     let s =
       self.map.get("s").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim s"));
-    assert_eq!(s.len(), gpe_count);
+    assert_eq!(s.len(), gpi_count);
 
     let i_ext_f =
       toml_py_function_qualname_to_py_object(self.map.get("i_ext").expect("default should be set by caller"));
-    let i_ext = vectorize_i_ext_py(&i_ext_f, dt / (edge_resolution as f64), total_t, gpe_count);
+    let i_ext = vectorize_i_ext_py(&i_ext_f, dt / (edge_resolution as f64), total_t, gpi_count);
 
     let i_app_f =
       toml_py_function_qualname_to_py_object(self.map.get("i_app").expect("default should be set by caller"));
-    let i_app = vectorize_i_ext_py(&i_app_f, dt / (edge_resolution as f64), total_t, gpe_count);
+    let i_app = vectorize_i_ext_py(&i_app_f, dt / (edge_resolution as f64), total_t, gpi_count);
 
-    debug!("GPe I_ext vectorized to\n{i_ext}");
-    debug!("GPe I_app vectorized to\n{i_app}");
+    debug!("GPi I_ext vectorized to\n{i_ext}");
+    debug!("GPi I_app vectorized to\n{i_app}");
 
     let w_g_g = self
       .map
       .get("w_g_g")
       .map(try_toml_value_to_2darray::<f64>)
-      .map_or(Array2::zeros((gpe_count, gpe_count)), |x| x.expect("invalid bc for w_g_g"));
+      .map_or(Array2::zeros((gpi_count, gpi_count)), |x| x.expect("invalid bc for w_g_g"));
     let c_g_g = self
       .map
       .get("c_g_g")
       .map(try_toml_value_to_2darray::<f64>)
       .map_or(w_g_g.mapv(|x| (x != 0.) as u8 as f64), |x| x.expect("invalid bc for c_g_g"))
       .mapv(|x| (x != 0.) as u8 as f64);
-    assert_eq!(c_g_g.shape(), &[gpe_count, gpe_count]);
+    assert_eq!(c_g_g.shape(), &[gpi_count, gpi_count]);
 
     let w_s_g = self
       .map
       .get("w_s_g")
       .map(try_toml_value_to_2darray::<f64>)
-      .map_or(Array2::zeros((stn_count, gpe_count)), |x| x.expect("invalid bc for w_s_g"));
+      .map_or(Array2::zeros((stn_count, gpi_count)), |x| x.expect("invalid bc for w_s_g"));
     let c_s_g = self
       .map
       .get("c_s_g")
       .map(try_toml_value_to_2darray::<f64>)
       .map_or(w_s_g.mapv(|x| (x != 0.) as u8 as f64), |x| x.expect("invalid bc for c_s_g"))
       .mapv(|x| (x != 0.) as u8 as f64);
-    assert_eq!(c_s_g.shape(), &[stn_count, gpe_count]);
+    assert_eq!(c_s_g.shape(), &[stn_count, gpi_count]);
 
-    GPePopulationBoundryConditions { count: gpe_count, v, n, h, r, ca, s, c_g_g, w_g_g, c_s_g, w_s_g, i_ext, i_app }
+    GPiPopulationBoundryConditions { count: gpi_count, v, n, h, r, ca, s, c_g_g, w_g_g, c_s_g, w_s_g, i_ext, i_app }
   }
 }
 
-impl GPePopulationBoundryConditions {
+impl GPiPopulationBoundryConditions {
   pub fn to_toml(&self, i_ext_py_qualified_name: &str, i_app_py_qualified_name: &str) -> toml::Value {
     let mut table = toml::value::Table::new();
     table.insert("count".to_owned(), (self.count as i64).into());
@@ -137,7 +137,7 @@ impl GPePopulationBoundryConditions {
 }
 
 #[derive(Clone)]
-pub struct GPePopulation {
+pub struct GPiPopulation {
   // State
   pub v: Array2<f64>,
   pub n: Array2<f64>,
@@ -173,8 +173,8 @@ pub struct GPePopulation {
   pub dt_spike: Array1<f64>,
 }
 
-impl GPePopulation {
-  pub fn with_bcs(mut self, bc: GPePopulationBoundryConditions) -> Self {
+impl GPiPopulation {
+  pub fn with_bcs(mut self, bc: GPiPopulationBoundryConditions) -> Self {
     self.v.row_mut(0).assign(&bc.v);
     self.n.row_mut(0).assign(&bc.n);
     self.h.row_mut(0).assign(&bc.h);
@@ -190,31 +190,31 @@ impl GPePopulation {
     self
   }
 
-  pub fn new(num_timesteps: usize, gpe_count: usize, stn_count: usize, edge_resolution: usize) -> Self {
-    GPePopulation {
-      v: Array2::zeros((num_timesteps, gpe_count)),
-      n: Array2::zeros((num_timesteps, gpe_count)),
-      h: Array2::zeros((num_timesteps, gpe_count)),
-      r: Array2::zeros((num_timesteps, gpe_count)),
-      ca: Array2::zeros((num_timesteps, gpe_count)),
-      s: Array2::zeros((num_timesteps, gpe_count)),
-      i_l: Array2::zeros((num_timesteps, gpe_count)),
-      i_k: Array2::zeros((num_timesteps, gpe_count)),
-      i_na: Array2::zeros((num_timesteps, gpe_count)),
-      i_t: Array2::zeros((num_timesteps, gpe_count)),
-      i_ca: Array2::zeros((num_timesteps, gpe_count)),
-      i_ahp: Array2::zeros((num_timesteps, gpe_count)),
-      i_s_g: Array2::zeros((num_timesteps, gpe_count)),
-      i_g_g: Array2::zeros((num_timesteps, gpe_count)),
-      i_ext: Array2::zeros((num_timesteps * edge_resolution, gpe_count)),
-      i_app: Array2::zeros((num_timesteps * edge_resolution, gpe_count)),
-      w_s_g: Array2::zeros((stn_count, gpe_count)),
-      w_g_g: Array2::zeros((gpe_count, gpe_count)),
-      c_s_g: Array2::zeros((stn_count, gpe_count)),
-      c_g_g: Array2::zeros((gpe_count, gpe_count)),
-      rho_pre: Array2::zeros((num_timesteps, gpe_count)),
-      rho_post: Array2::zeros((num_timesteps, gpe_count)),
-      dt_spike: Array1::from_elem(gpe_count, f64::INFINITY),
+  pub fn new(num_timesteps: usize, gpi_count: usize, stn_count: usize, edge_resolution: usize) -> Self {
+    GPiPopulation {
+      v: Array2::zeros((num_timesteps, gpi_count)),
+      n: Array2::zeros((num_timesteps, gpi_count)),
+      h: Array2::zeros((num_timesteps, gpi_count)),
+      r: Array2::zeros((num_timesteps, gpi_count)),
+      ca: Array2::zeros((num_timesteps, gpi_count)),
+      s: Array2::zeros((num_timesteps, gpi_count)),
+      i_l: Array2::zeros((num_timesteps, gpi_count)),
+      i_k: Array2::zeros((num_timesteps, gpi_count)),
+      i_na: Array2::zeros((num_timesteps, gpi_count)),
+      i_t: Array2::zeros((num_timesteps, gpi_count)),
+      i_ca: Array2::zeros((num_timesteps, gpi_count)),
+      i_ahp: Array2::zeros((num_timesteps, gpi_count)),
+      i_s_g: Array2::zeros((num_timesteps, gpi_count)),
+      i_g_g: Array2::zeros((num_timesteps, gpi_count)),
+      i_ext: Array2::zeros((num_timesteps * edge_resolution, gpi_count)),
+      i_app: Array2::zeros((num_timesteps * edge_resolution, gpi_count)),
+      w_s_g: Array2::zeros((stn_count, gpi_count)),
+      w_g_g: Array2::zeros((gpi_count, gpi_count)),
+      c_s_g: Array2::zeros((stn_count, gpi_count)),
+      c_g_g: Array2::zeros((gpi_count, gpi_count)),
+      rho_pre: Array2::zeros((num_timesteps, gpi_count)),
+      rho_post: Array2::zeros((num_timesteps, gpi_count)),
+      dt_spike: Array1::from_elem(gpi_count, f64::INFINITY),
     }
   }
 
@@ -222,7 +222,7 @@ impl GPePopulation {
     &mut self,
     it: usize,
     dt: f64,
-    p: &GPeParameters,
+    p: &GPiParameters,
     s_stn: &ArrayView1<f64>,
     rho_pre_stn: &ArrayView1<f64>,
   ) {
@@ -352,7 +352,7 @@ impl GPePopulation {
   }
 }
 
-pub struct GPeState<T>
+pub struct GPiState<T>
 where
   T: ndarray::Data<Elem = f64>,
 {
@@ -368,12 +368,12 @@ where
   pub ca_s_g: ArrayBase<T, Ix2>,
 }
 
-impl<T> Debug for GPeState<T>
+impl<T> Debug for GPiState<T>
 where
   T: ndarray::Data<Elem = f64> + Debug,
 {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    f.debug_struct("GPeState")
+    f.debug_struct("GPiState")
       .field("v", &self.v)
       .field("n", &self.n)
       .field("r", &self.r)
@@ -387,19 +387,19 @@ where
   }
 }
 
-impl<T> GPeState<T>
+impl<T> GPiState<T>
 where
   T: ndarray::Data<Elem = f64>,
 {
   pub fn dydt(
     &self,
-    p: &GPeParameters,
-    d_gpe: &ArrayView1<f64>,
+    p: &GPiParameters,
+    d_gpi: &ArrayView1<f64>,
     d_stn: &ArrayView1<f64>,
     s_stn: &ArrayView1<f64>,
     i_ext: &ArrayView1<f64>,
     i_app: &ArrayView1<f64>,
-  ) -> GPeState<OwnedRepr<f64>> {
+  ) -> GPiState<OwnedRepr<f64>> {
     let Self { v, n, h, r, ca, s, w_g_g, w_s_g, ca_g_g, ca_s_g } = self;
 
     let n_oo = x_oo(v, p.tht_n, p.sig_n);
@@ -423,7 +423,7 @@ where
     let i_g_g = p.g_g_g * (v - p.v_g_g) * (self.w_g_g.t().dot(s));
 
     // Update state
-    let dy = GPeState {
+    let dy = GPiState {
       v: -i_l - i_k - i_na - &i_t - &i_ca - i_ahp - i_s_g - i_g_g - i_ext + i_app,
       n: p.phi_n * (n_oo - n) / tau_n,
       h: p.phi_h * (h_oo - h) / tau_h,
@@ -433,25 +433,25 @@ where
       w_g_g: ndarray::Array::zeros(w_g_g.raw_dim()), // TODO - no plasticity
       w_s_g: ndarray::Array::zeros(w_s_g.raw_dim()), // TODO - no plasticity
       ca_g_g: -ca_g_g / p.tau_ca
-        + p.ca_pre * &d_gpe.insert_axis(ndarray::Axis(1))
-        + p.ca_post * &d_gpe.insert_axis(ndarray::Axis(0)),
+        + p.ca_pre * &d_gpi.insert_axis(ndarray::Axis(1))
+        + p.ca_post * &d_gpi.insert_axis(ndarray::Axis(0)),
       ca_s_g: -ca_s_g / p.tau_ca
         + p.ca_pre * &d_stn.insert_axis(ndarray::Axis(1))
-        + p.ca_post * &d_gpe.insert_axis(ndarray::Axis(0)),
+        + p.ca_post * &d_gpi.insert_axis(ndarray::Axis(0)),
     };
 
     dy
   }
 }
 
-impl<'l, 'r, R, L> Add<&'r GPeState<R>> for &'l GPeState<L>
+impl<'l, 'r, R, L> Add<&'r GPiState<R>> for &'l GPiState<L>
 where
   R: ndarray::Data<Elem = f64>,
   L: ndarray::Data<Elem = f64>,
 {
-  type Output = GPeState<OwnedRepr<f64>>;
-  fn add(self, rhs: &'r GPeState<R>) -> Self::Output {
-    GPeState {
+  type Output = GPiState<OwnedRepr<f64>>;
+  fn add(self, rhs: &'r GPiState<R>) -> Self::Output {
+    GPiState {
       v: &self.v + &rhs.v,
       n: &self.n + &rhs.n,
       h: &self.h + &rhs.h,
@@ -466,46 +466,46 @@ where
   }
 }
 
-impl<'r, R, L> Add<&'r GPeState<R>> for GPeState<L>
+impl<'r, R, L> Add<&'r GPiState<R>> for GPiState<L>
 where
   R: ndarray::Data<Elem = f64>,
   L: ndarray::Data<Elem = f64>,
 {
-  type Output = GPeState<OwnedRepr<f64>>;
-  fn add(self, rhs: &'r GPeState<R>) -> Self::Output {
+  type Output = GPiState<OwnedRepr<f64>>;
+  fn add(self, rhs: &'r GPiState<R>) -> Self::Output {
     &self + rhs
   }
 }
 
-impl<'l, R, L> Add<GPeState<R>> for &'l GPeState<L>
+impl<'l, R, L> Add<GPiState<R>> for &'l GPiState<L>
 where
   R: ndarray::Data<Elem = f64>,
   L: ndarray::Data<Elem = f64>,
 {
-  type Output = GPeState<OwnedRepr<f64>>;
-  fn add(self, rhs: GPeState<R>) -> Self::Output {
+  type Output = GPiState<OwnedRepr<f64>>;
+  fn add(self, rhs: GPiState<R>) -> Self::Output {
     self + &rhs
   }
 }
 
-impl<R, L> Add<GPeState<R>> for GPeState<L>
+impl<R, L> Add<GPiState<R>> for GPiState<L>
 where
   R: ndarray::Data<Elem = f64>,
   L: ndarray::Data<Elem = f64>,
 {
-  type Output = GPeState<OwnedRepr<f64>>;
-  fn add(self, rhs: GPeState<R>) -> Self::Output {
+  type Output = GPiState<OwnedRepr<f64>>;
+  fn add(self, rhs: GPiState<R>) -> Self::Output {
     &self + &rhs
   }
 }
 
-impl<'a, T> Mul<&'a GPeState<T>> for f64
+impl<'a, T> Mul<&'a GPiState<T>> for f64
 where
   T: ndarray::Data<Elem = f64>,
 {
-  type Output = GPeState<OwnedRepr<f64>>;
-  fn mul(self, rhs: &'a GPeState<T>) -> Self::Output {
-    GPeState {
+  type Output = GPiState<OwnedRepr<f64>>;
+  fn mul(self, rhs: &'a GPiState<T>) -> Self::Output {
+    GPiState {
       v: self * &rhs.v,
       n: self * &rhs.n,
       h: self * &rhs.h,
@@ -520,38 +520,38 @@ where
   }
 }
 
-impl<T> Mul<GPeState<T>> for f64
+impl<T> Mul<GPiState<T>> for f64
 where
   T: ndarray::Data<Elem = f64>,
 {
-  type Output = GPeState<OwnedRepr<f64>>;
-  fn mul(self, rhs: GPeState<T>) -> Self::Output {
+  type Output = GPiState<OwnedRepr<f64>>;
+  fn mul(self, rhs: GPiState<T>) -> Self::Output {
     self * &rhs
   }
 }
 
-impl<'a, T> Mul<f64> for &'a GPeState<T>
+impl<'a, T> Mul<f64> for &'a GPiState<T>
 where
   T: ndarray::Data<Elem = f64>,
 {
-  type Output = GPeState<OwnedRepr<f64>>;
+  type Output = GPiState<OwnedRepr<f64>>;
   fn mul(self, rhs: f64) -> Self::Output {
     rhs * self
   }
 }
 
-impl<'a, T> Mul<f64> for GPeState<T>
+impl<'a, T> Mul<f64> for GPiState<T>
 where
   T: ndarray::Data<Elem = f64>,
 {
-  type Output = GPeState<OwnedRepr<f64>>;
+  type Output = GPiState<OwnedRepr<f64>>;
   fn mul(self, rhs: f64) -> Self::Output {
     rhs * &self
   }
 }
 
 #[derive(Default, Clone)]
-pub struct GPeHistory {
+pub struct GPiHistory {
   pub v: Array2<f64>,
   pub n: Array2<f64>,
   pub h: Array2<f64>,
@@ -566,25 +566,27 @@ pub struct GPeHistory {
   pub i_app: Array2<f64>,
 }
 
-impl GPeHistory {
-  pub fn new(num_timesteps: usize, gpe_count: usize, stn_count: usize, edge_resolution: usize) -> Self {
+impl GPiHistory {
+  pub fn new(num_timesteps: usize, gpi_count: usize, stn_count: usize, edge_resolution: usize) -> Self {
+    dbg!(gpi_count);
     Self {
-      v: Array2::zeros((num_timesteps, gpe_count)),
-      n: Array2::zeros((num_timesteps, gpe_count)),
-      h: Array2::zeros((num_timesteps, gpe_count)),
-      r: Array2::zeros((num_timesteps, gpe_count)),
-      ca: Array2::zeros((num_timesteps, gpe_count)),
-      s: Array2::zeros((num_timesteps, gpe_count)),
-      i_ext: Array2::zeros((num_timesteps * edge_resolution, gpe_count)),
-      i_app: Array2::zeros((num_timesteps * edge_resolution, gpe_count)),
-      w_s_g: Array2::zeros((stn_count, gpe_count)),
-      w_g_g: Array2::zeros((gpe_count, gpe_count)),
-      ca_s_g: Array3::zeros((num_timesteps * edge_resolution, stn_count, gpe_count)),
-      ca_g_g: Array3::zeros((num_timesteps * edge_resolution, gpe_count, gpe_count)),
+      v: Array2::zeros((num_timesteps, gpi_count)),
+      n: Array2::zeros((num_timesteps, gpi_count)),
+      h: Array2::zeros((num_timesteps, gpi_count)),
+      r: Array2::zeros((num_timesteps, gpi_count)),
+      ca: Array2::zeros((num_timesteps, gpi_count)),
+      s: Array2::zeros((num_timesteps, gpi_count)),
+      i_ext: Array2::zeros((num_timesteps * edge_resolution, gpi_count)),
+      i_app: Array2::zeros((num_timesteps * edge_resolution, gpi_count)),
+      w_s_g: Array2::zeros((stn_count, gpi_count)),
+      w_g_g: Array2::zeros((gpi_count, gpi_count)),
+      ca_s_g: Array3::zeros((num_timesteps * edge_resolution, stn_count, gpi_count)),
+      ca_g_g: Array3::zeros((num_timesteps * edge_resolution, gpi_count, gpi_count)),
     }
   }
 
-  pub fn with_bcs(mut self, bc: GPePopulationBoundryConditions) -> Self {
+  pub fn with_bcs(mut self, bc: GPiPopulationBoundryConditions) -> Self {
+    dbg!(self.i_ext.shape(), &bc.i_ext.shape());
     self.v.row_mut(0).assign(&bc.v);
     self.n.row_mut(0).assign(&bc.n);
     self.h.row_mut(0).assign(&bc.h);
@@ -598,7 +600,7 @@ impl GPeHistory {
     self
   }
 
-  pub fn insert(&mut self, it: usize, y: &GPeState<OwnedRepr<f64>>) {
+  pub fn insert(&mut self, it: usize, y: &GPiState<OwnedRepr<f64>>) {
     self.v.row_mut(it).assign(&y.v);
     self.n.row_mut(it).assign(&y.n);
     self.r.row_mut(it).assign(&y.r);
@@ -611,8 +613,8 @@ impl GPeHistory {
     self.ca_g_g.slice_mut(s![it, .., ..]).assign(&y.ca_g_g);
   }
 
-  pub fn row<'a>(&'a self, it: usize) -> GPeState<ViewRepr<&'a f64>> {
-    GPeState {
+  pub fn row<'a>(&'a self, it: usize) -> GPiState<ViewRepr<&'a f64>> {
+    GPiState {
       v: self.v.row(it),
       n: self.n.row(it),
       h: self.h.row(it),
@@ -626,8 +628,8 @@ impl GPeHistory {
     }
   }
 
-  pub fn from_population(pop: GPePopulation) -> Self {
-    let GPePopulation { v, n, h, r, ca, s, w_s_g, w_g_g, i_ext, i_app, .. } = pop;
+  pub fn from_population(pop: GPiPopulation) -> Self {
+    let GPiPopulation { v, n, h, r, ca, s, w_s_g, w_g_g, i_ext, i_app, .. } = pop;
     Self {
       n,
       h,

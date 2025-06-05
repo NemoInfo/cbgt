@@ -82,6 +82,9 @@ tht_spike = 0    # STDP spike voltage threshold (mV)
 min_dt_spike = 2 # STDP min interspike interval (ms)
 a_pre = 1        # STDP strengthen constant
 a_post = 1       # STDP weaken constant
+tau_ca = 7.0
+ca_pre = 0.99
+ca_post = 1.55
 
 ##################################################
 [GPe]                                            #
@@ -161,3 +164,88 @@ tht_spike = 0    # STDP spike voltage threshold (mV)
 min_dt_spike = 2 # STDP min interspike interval (ms)
 a_pre = 1        # STDP strengthen constant
 a_post = 1       # STDP weaken constant
+tau_ca = 7.0
+ca_pre = 0.99
+ca_post = 1.55
+
+##################################################
+[GPi]                                            #
+##################################################
+# Conductances
+g_l = 0.1    # nS/um^2 
+g_k = 30.0   # nS/um^2 
+g_na = 120   # nS/um^2 
+g_t = 0.5    # nS/um^2 
+g_ca = 0.15  # nS/um^2 
+g_ahp = 30   # nS/um^2 
+g_s_g = 0.03 # nS/um^2
+g_g_g = 0.06 # nS/um^2
+
+# Reversal potentials
+v_l = -55     # mV 
+v_k = -80     # mV 
+v_na = 55     # mV 
+v_ca = 120    # mV 
+v_g_g = -100  # mV 
+v_s_g = -100  # mV 
+
+# Time constants
+tau_h_1 = 0.27 # ms 
+tau_n_1 = 0.27 # ms 
+tau_h_0 = 0.05 # ms 
+tau_n_0 = 0.05 # ms 
+tau_r = 30     # ms 
+
+phi_h = 0.05 
+phi_n = 0.05 
+phi_r = 1.0  
+
+# Calcium parameters
+k_1 = 30   
+k_ca = 20  
+eps = 1e-4 # ms^-1 
+
+# Threshold potentials
+tht_m = -37 # mV 
+tht_h = -58 # mV 
+tht_n = -50 # mV 
+tht_r = -70 # mV 
+tht_a = -57 # mV 
+tht_s = -35 # mV 
+
+# Tau threshold potentials
+tht_h_t = -40 # mV 
+tht_n_t = -40 # mV 
+
+# Synaptic threshold potentials
+tht_g_h = -57 # mV 
+tht_g = 20    # mV 
+
+# Synaptic rate constants
+alpha = 2  # ms^-1 
+beta = 0.08 # ms^-1 
+
+# Sigmoid slopes
+sig_m = 10  
+sig_h = -12 
+sig_n = 14  
+sig_r = -2  
+sig_a = 2
+sig_s = 2   
+
+# Tau sigmoid slopes
+sig_h_t = -12 
+sig_n_t = -12 
+
+# Synaptic sigmoid slope
+sig_g_h = 2 
+
+tau_pre = 10     # STDP time-constant (ms)
+tau_post = 20    # STDP time-constant (ms)
+tht_spike = 0    # STDP spike voltage threshold (mV)
+min_dt_spike = 2 # STDP min interspike interval (ms)
+a_pre = 1        # STDP strengthen constant
+a_post = 1       # STDP weaken constant
+tau_ca = 7.0
+ca_pre = 0.99
+ca_post = 1.55
