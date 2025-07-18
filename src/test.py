@@ -1,57 +1,79 @@
 import cbgt
 import numpy as np
-from sys import argv
 from plot import *
-import polars as pl
 import matplotlib.pyplot as plt
 import matplotlib as mpl
+from matplotlib.colors import LinearSegmentedColormap, ListedColormap
 import argparse
 import time
 import subprocess
 import sys
 
-cmap = "YlGnBu"
+target_color = "#5e3c99"
+base = LinearSegmentedColormap.from_list("custom_purple", ["white", target_color], N=256)
+cmap = ListedColormap(base(np.linspace(0.25, 1.0, 512)))
+mpl.use('TkAgg')
 
 
 def parse_opt(pairs):
   kwargs = {}
   for pair in pairs:
     key, value = pair.split('=')
-    kwargs[key] = float(value) if value.isnumeric() else value
+    kwargs[key] = eval(value)
   return kwargs
+
+
+def zeros(time_ms, t):
+  return 0.0
+
+
+def uniform(time_ms, n):
+  start, end = 500, 2500
+  return 40. if start < time_ms < end else 0
 
 
 def gpi_i_ext(time_ms, n):
   return 0.0
 
 
-def gpe_i_ext(time_ms, n):
+def oscillatory(time_ms, n):
   start, end = 500, 2500
   if time_ms < start or time_ms > end:
     return 0.0
 
-  period_ms = 1000.0 / 133.0
+  period_ms = 1000.0 / 44.0
   time_in_cycle = (time_ms - start) % period_ms
 
   if time_in_cycle < (period_ms / 2):
-    return -20.0
+    return 50.0
   else:
     return 0.0
 
 
-def stn_i_ext(time_ms, n):
-  # start, end = 1500, 2500
-  # if time_ms < start or time_ms > end:
-  #   return 0.0
-  #
-  # period_ms = 1000.0 / 133.0
-  # time_in_cycle = (time_ms - start) % period_ms
-  #
-  # if time_in_cycle < (period_ms / 2):
-  #   return 30.0
-  # else:
-  #   return 0.0
-  return 0.0
+def white_noise_stn(time_ms, n):
+  import numpy as np
+  return np.random.normal(loc=10, scale=4)
+
+
+def white_noise_str(time_ms, n):
+  import numpy as np
+  # return np.random.normal(loc=-8, scale=4)
+  return 0
+
+
+def white_noise_gpe(time_ms, n):
+  import numpy as np
+  return np.random.normal(loc=0, scale=0.1)
+
+
+def brown_noise_str(t, n):
+  from noise import pnoise2
+  return abs(pnoise2(t * 0.01, n, octaves=8, persistence=0.5, lacunarity=2.0)) * 20
+
+
+def brown_noise_stn(t, n):
+  from noise import pnoise2
+  return abs(pnoise2(t * 0.01, n, octaves=8, persistence=0.5, lacunarity=2.0)) * 10
 
 
 def test(experiment="wave", total_t=2, metrics=None, **opt):
@@ -59,14 +81,13 @@ def test(experiment="wave", total_t=2, metrics=None, **opt):
   rt = cbgt.Network(dt=0.05,
                     total_t=total_t,
                     experiment=experiment,
-                    gpe_i_ext=gpe_i_ext,
-                    gpi_i_ext=gpi_i_ext,
-                    stn_i_ext=gpe_i_ext,
-                    gpi_w_g_g=np.eye(8, dtype=np.float64),
+                    stn_i_ext=brown_noise_stn,
+                    str_i_ext=brown_noise_str,
+                    gpi_i_ext=zeros,
                     **opt)
   start = time.time()
   rt.run_rk4()
-  print(f"{time.time() - start:.2f}s")
+  print(f"\n> Simulated {total_t:.2f}s in {time.time() - start:.2f}s 🚀\n")
   df = rt.to_polars()
 
   # df_ca_gpe = df["gpe"].with_columns(pl.col("ca_s_g").arr.get(2).alias("ca0"))
@@ -90,9 +111,12 @@ def test(experiment="wave", total_t=2, metrics=None, **opt):
 def main(args):
   np.random.seed(69)
   opt = parse_opt(args.opt)
-  plt.style.use('dark_background')
-  plt.rcParams["figure.facecolor"] = "#101418"
-  plt.rcParams["axes.facecolor"] = "#101418"
+  # plt.style.use('dark_background')
+  # plt.rcParams["figure.facecolor"] = "#101418"
+  # plt.rcParams["axes.facecolor"] = "#101418"
+  mpl.rcParams['savefig.transparent'] = True
+  mpl.rcParams['figure.facecolor'] = 'none'
+  mpl.rcParams['axes.facecolor'] = 'none'
   test(experiment=args.experiment, total_t=args.time, metrics=args.plt, **opt)
 
 

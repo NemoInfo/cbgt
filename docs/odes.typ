@@ -16,7 +16,23 @@
 #show heading.where(level: 2): set heading(numbering: "1.", level: 1)
 //#show math.equation: set text(size: 10pt)
 
-#align(center)[= CBGT model equations]
+#let title = [CBGT model equations]
+#align(center, text(17pt)[*#title*])
+
+= Poster
+$
+par(C_"m") bold(dv) &= - IL - IK - INa - IT - ICa - IAHP - I_("GPe"->"STN") + eta_"M2" \
+I_("GPe"->"STN") &=  par(g_("GPe" -> "STN")) (bv - par(v_("GPe" -> "STN"))) #h(-4pt) sum_(s_j in"GPe")#h(-4pt) bold(w_j s_j) \
+dot(s) &= par(alpha) H_oo (v - par(theta_g))(1 - s) - par(beta)s, quad
+H_oo (v) = (1 + exp(-((v - par(theta^H_g))\/ par(sigma^H_g))))^(-1) \
+par(tau_"Ca") bold(dot(["Ca"])_"syn") &= - bold(["Ca"]_"syn") + par("Ca"_"pre")  delta(t - t^"pre"_"spike") + par("Ca"_"post")  delta(t - t^"post"_"spike") \
+bold(dot(w)) &= 
+lr(\{med #block($
+  &0 &&wide, bold(["Ca"]_"syn") < par(theta_D) \
+  &par(eta_D) (par(F_D) - bold(w)) &&wide, par(theta_D) < bold(["Ca"]_"syn") < par(theta_P) \
+  &par(eta_P) (par(F_P) - bold(w)) &&wide, par(theta_P) < bold(["Ca"]_"syn") \
+$)) 
+$
 
 == STN 
 $
@@ -39,6 +55,7 @@ dot(s) &= par(alpha) H_oo (v - par(theta_g))(1 - s) - par(beta)s \
 H_oo (v) &= (1 + exp(-frac(v - par(theta^H_g), par(sigma^H_g))))^(-1) \
 IGS &=  par(g_("G" -> "S")) (bv - par(v_("G" -> "S"))) sum_(s_j in"GPe") w_j bold(s_j)\
 $ 
+#v(100%)
 
 == GPe
 Same as STN except
@@ -57,9 +74,8 @@ $
    0 &quad "if" x != 0,
    oo &quad "if" x = 0)quad, "s.t." & integral_(-oo)^oo delta(t) d t = 1
 $ 
-#v(100%)
-
 For a weight from neuron $i in I$ to  neuron $j in J$
+
 $
  Delta w_(i,j) &= cases(
    &par(pr(A^J)) bold(pr(p^i)) &quad "if" t = t^i_"spike",
@@ -75,6 +91,8 @@ Delta W &= eta lr((par(pr(A^J)) ((bold(p^I_"pre"))^top dot bb(1)_{bold(po(p^J)) 
 $
 
 #v(1fr)
+
+#outline()
 
 #align(right)[
 = Legend

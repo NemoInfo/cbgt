@@ -23,8 +23,10 @@
           marimo
           polars
           altair
+          noise
           (pkgs.rustc) # Rust compiler
           (pkgs.cargo) # Rust dependecy manager
+          (pkgs.cargo-flamegraph)
         ];
 
         shellHook = ''

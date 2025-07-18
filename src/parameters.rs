@@ -4,7 +4,88 @@ use struct_field_names_as_array::FieldNamesAsSlice;
 use crate::gpe::GPe;
 use crate::gpi::GPi;
 use crate::stn::STN;
+use crate::str::STR;
 use crate::types::*;
+
+#[derive(Deserialize, Serialize, Debug, FieldNamesAsSlice, Clone, Default)]
+#[allow(unused)]
+pub struct STRParameters {
+  // Conductances
+  pub g_l: f64,   // nS/um^2
+  pub g_k: f64,   // nS/um^2
+  pub g_na: f64,  // nS/um^2
+  pub g_t: f64,   // nS/um^2
+  pub g_ca: f64,  // nS/um^2
+  pub g_ahp: f64, // nS/um^2
+  pub g_str: f64, // nS/um^2
+
+  // Reversal potentials
+  pub v_l: f64,  // mV
+  pub v_k: f64,  // mV
+  pub v_na: f64, // mV
+  pub v_ca: f64, // mV
+  pub v_str: f64,
+
+  // Time constants
+  pub tau_h_1: f64, // ms
+  pub tau_n_1: f64, // ms
+  pub tau_r_1: f64, // ms
+  pub tau_h_0: f64, // ms
+  pub tau_n_0: f64, // ms
+  pub tau_r_0: f64, // 40. // ms [MISMATCH]
+
+  pub phi_h: f64,
+  pub phi_n: f64,
+  pub phi_r: f64, // 0.2 // [MISMATCH]
+
+  // Calcium parameters
+  pub k_1: f64,
+  pub k_ca: f64,
+  pub eps: f64, // ms^-1 x (== phi_h * 5e-5)
+
+  // Threshold potentials
+  pub tht_m: f64, // mV x
+  pub tht_h: f64, // mV x
+  pub tht_n: f64, // mV x
+  pub tht_r: f64, // mV
+  pub tht_a: f64, // mV
+  pub tht_b: f64, // 0.4 [MISMATCH]
+  pub tht_s: f64, // mV x
+
+  // Tau threshold potentials
+  pub tht_h_t: f64, // mV
+  pub tht_n_t: f64, // mV
+  pub tht_r_t: f64, // mV
+
+  // Synaptic threshold potentials
+  pub tht_g_h: f64, // mV
+  pub tht_g: f64,   // mV
+
+  // Synaptic rate constants
+  pub alpha: f64, // ms^-1
+  pub beta: f64,  // ms^-1
+
+  // Sigmoid slopes
+  pub sig_m: f64,
+  pub sig_h: f64,
+  pub sig_n: f64,
+  pub sig_r: f64,
+  pub sig_a: f64,
+  pub sig_b: f64, // -0.1 [MISMATCH]
+  pub sig_s: f64,
+
+  // Tau sigmoid slopes
+  pub sig_h_t: f64,
+  pub sig_n_t: f64,
+  pub sig_r_t: f64,
+
+  // Synaptic sigmoid slopes
+  pub sig_g_h: f64,
+
+  pub tau_ca: f64,
+  pub ca_pre: f64,
+  pub ca_post: f64,
+}
 
 #[derive(Deserialize, Serialize, Debug, FieldNamesAsSlice, Clone, Default)]
 #[allow(unused)]
@@ -85,16 +166,18 @@ pub struct STNParameters {
   pub b_const: f64,
 
   // STDP
-  pub tau_pre: f64,
-  pub tau_post: f64,
-  pub tht_spike: f64,
-  pub min_dt_spike: f64,
-  pub a_pre: f64,
-  pub a_post: f64,
+  pub tau_pre: f64,      // [DEPRECATED]
+  pub tau_post: f64,     // [DEPRECATED]
+  pub tht_spike: f64,    // [DEPRECATED]
+  pub min_dt_spike: f64, // [DEPRECATED]
+  pub a_pre: f64,        // [DEPRECATED]
+  pub a_post: f64,       // [DEPRECATED]
 
   pub tau_ca: f64,
   pub ca_pre: f64,
   pub ca_post: f64,
+  pub theta_d: f64,
+  pub theta_p: f64,
 }
 
 #[derive(Serialize, Deserialize, Debug, FieldNamesAsSlice, Clone, Default)]
@@ -109,6 +192,7 @@ pub struct GPeParameters {
   pub g_ahp: f64, // nS/um^2
   pub g_s_g: f64, // nS/um^2
   pub g_g_g: f64, // nS/um^2
+  pub g_str: f64, // nS/um^2
 
   // Reversal potentials
   pub v_l: f64,   // mV
@@ -117,6 +201,7 @@ pub struct GPeParameters {
   pub v_ca: f64,  // mV
   pub v_g_g: f64, // mV
   pub v_s_g: f64, // mV
+  pub v_str: f64, // mV
 
   // Time constants
   pub tau_h_1: f64, // ms
@@ -193,6 +278,7 @@ pub struct GPiParameters {
   pub g_ahp: f64, // nS/um^2
   pub g_s_g: f64, // nS/um^2
   pub g_g_g: f64, // nS/um^2
+  pub g_str: f64, // nS/um^2
 
   // Reversal potentials
   pub v_l: f64,   // mV
@@ -201,6 +287,7 @@ pub struct GPiParameters {
   pub v_ca: f64,  // mV
   pub v_g_g: f64, // mV
   pub v_s_g: f64, // mV
+  pub v_str: f64, // mV
 
   // Time constants
   pub tau_h_1: f64, // ms
@@ -265,18 +352,21 @@ pub struct GPiParameters {
   pub ca_post: f64,
 }
 
+impl Build<STR, Parameters> for STRParameters {}
 impl Build<STN, Parameters> for STNParameters {}
 impl Build<GPe, Parameters> for GPeParameters {}
 impl Build<GPi, Parameters> for GPiParameters {}
 
 impl PostInit for GPeParameters {}
 impl PostInit for GPiParameters {}
+impl PostInit for STRParameters {}
 impl PostInit for STNParameters {
   fn post_init(self) -> Self {
     Self { b_const: 1. / (1. + f64::exp(-self.tht_b / self.sig_b)), ..self }
   }
 }
 
+pub type BuilderSTRParameters = Builder<STR, Parameters, STRParameters>;
 pub type BuilderSTNParameters = Builder<STN, Parameters, STNParameters>;
 pub type BuilderGPeParameters = Builder<GPe, Parameters, GPeParameters>;
 pub type BuilderGPiParameters = Builder<GPi, Parameters, GPiParameters>;

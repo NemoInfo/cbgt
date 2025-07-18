@@ -5,6 +5,8 @@ use parameters::*;
 
 mod stn;
 
+mod str;
+
 mod gpe;
 
 mod gpi;

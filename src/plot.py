@@ -1,31 +1,49 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from typing import Any
+from matplotlib.ticker import FormatStrFormatter
 
 
-def plot_time_activity(dfs, labels, title=None, cmap="gray_r", file=None, y="v", unit="", vmax=np.inf, vmin=-np.inf):
+def plot_time_activity(dfs,
+                       labels,
+                       title=None,
+                       cmap="gray_r",
+                       file=None,
+                       y="v",
+                       unit="",
+                       vmax=1,
+                       vmin=0,
+                       max_num_neurons=30):
   assert len(dfs) != 0
+  _vmin, _vmax = vmin, vmax
+
   unit = f"({unit})" if unit != "" else unit
   dt = dfs[0]["time"][1]
 
   xs = [np.stack(df[y]) for df in dfs]
-  num_neurons = sum([x.shape[1] for x in xs])
+  num_neurons = min(sum([x.shape[1] for x in xs]), max_num_neurons * len(xs))
 
   fig, axs = plt.subplots(len(xs), 1, sharex=True, figsize=(8, num_neurons * 0.3))
   axs = np.atleast_1d(axs)
 
-  _vmax = vmax
-  _vmin = vmin
   im: Any = None
   for ax, x, label in zip(axs, xs, labels):
-    vmin = max(x.min(), _vmin)
-    vmax = min(x.max(), _vmax)
-    im = ax.imshow(x.T, aspect='auto', cmap=cmap, interpolation='nearest', vmin=vmin, vmax=vmax)
+    vmax = max(_vmax, x.T[:max_num_neurons].max())
+    vmin = min(_vmin, x.T[:max_num_neurons].min())
+    im = ax.imshow(x.T[:max_num_neurons], aspect='auto', cmap=cmap, interpolation='nearest', vmin=vmin, vmax=vmax)
     ax.set_yticks([0, x.shape[1] - 1])
     ax.set_yticklabels([1, x.shape[1]])
     ax.set_ylabel(f"{label} #", rotation=0, fontsize=14, labelpad=15)
-    cbar = fig.colorbar(im, ax=ax, location="right", label=f"Voltage {unit}", shrink=0.8, aspect=50)
-    cbar.set_ticks(np.arange(vmax, vmin - 1, -20))
+    cbar = fig.colorbar(
+        im,
+        ax=ax,
+        location="right",
+        label=f"Voltage {unit}",
+        shrink=0.8,
+        aspect=10,
+    )
+    cbar.set_ticks(np.linspace(vmin, vmax, 3))
+    cbar.ax.yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
     cbar.set_label(unit, rotation=0, fontsize=14, labelpad=15)
 
   axs[-1].set_xticks([0, xs[-1].shape[0]])

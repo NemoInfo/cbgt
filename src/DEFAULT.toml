@@ -1,4 +1,95 @@
 ##################################################
+[STR]                                            #
+##################################################
+# Conductances
+g_l = 2.25  # nS/um^2 
+g_k = 45   # nS/um^2 
+g_na = 37.5 # nS/um^2 
+g_t = 0.5   # nS/um^2 
+g_ca = 0.5  # nS/um^2 
+g_ahp = 9  # nS/um^2 
+g_str = 0.06 # nS/um^2 
+
+# Reversal potentials
+v_l = -60     # mV 
+v_k = -80     # mV 
+v_na = 55     # mV 
+v_ca = 140    # mV 
+v_str = -100  # -85  # mV
+
+# Time constants
+tau_h_1 = 500  # ms 
+tau_n_1 = 100  # ms 
+tau_r_1 = 17.5 # ms
+tau_h_0 = 1    # ms 
+tau_n_0 = 1    # ms 
+tau_r_0 = 7.1  # 40  # ms [mismatch]
+
+phi_h = 0.75 
+phi_n = 0.75 
+phi_r = 0.5  # 0.2 # [mismatch]
+
+# Calcium parameters
+k_1 = 15      
+k_ca = 22.5   
+eps = 3.75e-5 # ms^-1 (== phi_h * 5e-5)
+
+# Threshold potentials
+tht_m = -30  # mV 
+tht_h = -39  # mV
+tht_n = -32  # mV
+tht_r = -67  # mV 
+tht_a = -63  # mV 
+tht_b = 0.25 # 0.4 [mismatch]
+tht_s = -39  # mV 
+
+# Tau threshold potentials
+tht_h_t = -57  # mV 
+tht_n_t = -80  # mV 
+tht_r_t = 68   # mV 
+
+# Synaptic threshold potentials
+tht_g_h = -39  # mV
+tht_g = 30     # mV 
+
+# Synaptic rate constants
+alpha = 5  # ms^-1 
+beta = 1   # ms^-1 
+
+# Sigmoid slopes
+sig_m = 15    
+sig_h = -3.1  
+sig_n = 8     
+sig_r = -2.0  
+sig_a = 7.8   
+sig_b = -0.07 # -0.1 [mismatch]
+sig_s = 8     
+
+# Tau sigmoid slopes
+sig_h_t = -3   
+sig_n_t = -26  
+sig_r_t = -2.2 
+
+# Synaptic sigmoid slopes
+sig_g_h = 8
+
+# b_inf constant parameter (pre-computed at runtime)
+b_const = nan
+
+tau_pre = 10     # STDP time-constant (ms)
+tau_post = 20    # STDP time-constant (ms)
+tht_spike = 0    # STDP spike voltage threshold (mV)
+min_dt_spike = 2 # STDP min interspike interval (ms)
+a_pre = 1        # STDP strengthen constant
+a_post = 1       # STDP weaken constant
+tau_ca = 7.0
+ca_pre = 0.99
+ca_post = 1.55
+theta_d = 0.001
+theta_p = 0.05
+
+
+##################################################
 [STN]                                            #
 ##################################################
 # Conductances
@@ -85,6 +176,8 @@ a_post = 1       # STDP weaken constant
 tau_ca = 7.0
 ca_pre = 0.99
 ca_post = 1.55
+theta_d = 0.001
+theta_p = 0.05
 
 ##################################################
 [GPe]                                            #
@@ -98,6 +191,7 @@ g_ca = 0.15  # nS/um^2
 g_ahp = 30   # nS/um^2 
 g_s_g = 0.03 # nS/um^2
 g_g_g = 0.06 # nS/um^2
+g_str = 0.06 # nS/um^2
 
 # Reversal potentials
 v_l = -55     # mV 
@@ -106,6 +200,7 @@ v_na = 55     # mV
 v_ca = 120    # mV 
 v_g_g = -100  # mV 
 v_s_g = 0     # mV 
+v_str = -100  # nS/um^2
 
 # Time constants
 tau_h_1 = 0.27 # ms 
@@ -180,6 +275,7 @@ g_ca = 0.15  # nS/um^2
 g_ahp = 30   # nS/um^2 
 g_s_g = 0.03 # nS/um^2
 g_g_g = 0.06 # nS/um^2
+g_str = 0.06 # nS/um^2
 
 # Reversal potentials
 v_l = -55     # mV 
@@ -188,6 +284,7 @@ v_na = 55     # mV
 v_ca = 120    # mV 
 v_g_g = -100  # mV 
 v_s_g = -100  # mV 
+v_str = -100  # mV 
 
 # Time constants
 tau_h_1 = 0.27 # ms 

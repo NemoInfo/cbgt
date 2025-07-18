@@ -10,6 +10,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 ndarray = "0.16.1"
 pyo3 = "0.23.0"
+numpy = "0.23.0"
 pyo3-polars = "0.20.0"
 polars = { version = "0.46.0", features = ["parquet", "dtype-array"]}
 serde = { version = "1.0", features = ["derive"] }
@@ -20,3 +21,4 @@ log = "0.4.27"
 regex = "1.11.1"
 uuid = { version = "1.4", features = ["v4"] } 
 crossbeam = "0.8.4"
+indicatif = "0.17.11"

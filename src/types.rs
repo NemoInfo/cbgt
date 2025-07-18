@@ -1,5 +1,6 @@
-use pyo3::prelude::*;
-use std::collections::HashMap;
+use numpy::{PyArray1, PyArrayDyn, PyArrayMethods, PyUntypedArrayMethods};
+use pyo3::{prelude::*, IntoPyObjectExt};
+use std::{borrow::Borrow, collections::HashMap};
 use struct_field_names_as_array::FieldNamesAsSlice;
 
 use crate::{util::*, PYF_FILE_NAME, TMP_PYF_FILE_NAME, TMP_PYF_FILE_PATH};
@@ -261,7 +262,31 @@ where
       self.pyf_map.insert(qname.clone(), src);
       toml::map::Map::from_iter([(key.into(), toml::Value::String(qname))])
     } else {
-      parse_toml_value(key, &format!("{value:?}")).try_into().unwrap()
+      if let Ok(arr) = value.downcast::<PyArrayDyn<f64>>() {
+        let v = match arr.ndim() {
+          1 => {
+            let arr =
+              arr.to_vec().expect("Numpy array not contiguous").iter().map(|&x| toml::Value::Float(x)).collect();
+            toml::Value::Array(arr)
+          }
+          2 => {
+            let arr = arr
+              .to_vec()
+              .expect("Numpy array not contiguous")
+              .iter()
+              .map(|&x| toml::Value::Float(x))
+              .collect::<Vec<_>>()
+              .chunks(arr.shape()[1])
+              .map(|x| toml::Value::Array(x.to_vec()))
+              .collect::<Vec<_>>();
+            toml::Value::Array(arr)
+          }
+          _ => panic!(),
+        };
+        toml::map::Map::from_iter([(key.to_owned(), v)])
+      } else {
+        parse_toml_value(key, &format!("{value:?}")).try_into().unwrap()
+      }
     }
   }
 
