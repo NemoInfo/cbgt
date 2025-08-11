@@ -34,6 +34,7 @@ pub struct STNPopulationBoundryConditions {
   // Connection Matrice
   pub w_g_s: Array2<f64>,
   pub c_g_s: Array2<f64>,
+  pub w_ctx: Array2<f64>,
 }
 
 impl Build<STN, Boundary> for STNPopulationBoundryConditions {
@@ -47,6 +48,7 @@ impl Builder<STN, Boundary, STNPopulationBoundryConditions> {
     self,
     stn_count: usize,
     gpe_count: usize,
+    ctx_count: usize,
     dt: f64,
     total_t: f64,
     edge_resolution: u8,
@@ -93,7 +95,20 @@ impl Builder<STN, Boundary, STNPopulationBoundryConditions> {
       .mapv(|x| (x != 0.) as u8 as f64);
     assert_eq!(w_g_s.shape(), &[gpe_count, stn_count]);
 
-    STNPopulationBoundryConditions { count: stn_count, v, n, h, r, ca, s, w_g_s, c_g_s, i_ext }
+    let w_ctx = self
+      .map
+      .get("w_ctx")
+      .map(try_toml_value_to_2darray::<f64>)
+      .map_or(Array2::zeros((ctx_count, stn_count)), |x| x.expect("invalid bc for w_ctx"));
+    let c_ctx = self
+      .map
+      .get("c_ctx")
+      .map(try_toml_value_to_2darray::<f64>)
+      .map_or(w_ctx.mapv(|x| (x != 0.) as u8 as f64), |x| x.expect("invalid bc for c_ctx"))
+      .mapv(|x| (x != 0.) as u8 as f64);
+    assert_eq!(w_ctx.shape(), &[ctx_count, stn_count]);
+
+    STNPopulationBoundryConditions { count: stn_count, v, n, h, r, ca, s, w_g_s, c_g_s, w_ctx, i_ext }
   }
 }
 
@@ -129,12 +144,28 @@ pub struct STNHistory {
   pub s: Array2<f64>,
   pub w_g_s: Array2<f64>,
   pub ca_g_s: Array2<f64>,
+  pub w_ctx: Array2<f64>,
   pub i_ext: Array2<f64>,
   pub i_g_s: Array2<f64>,
 }
 
+// How about: the structure of my noise, not really because i want to enforce a min_isi is
+// already known white i want as input is just a function
+// of the stimuli being on or off maybe
+//
+// but still I can just generate it no?
+// Say i want a batch of the noise
+// STIMULI + SEED --> CTX NOISE
+//  TIME INTERVAL /  then W_CTX in every nuclei
+
 impl STNHistory {
-  pub fn new(num_timesteps: usize, stn_count: usize, gpe_count: usize, edge_resolution: usize) -> Self {
+  pub fn new(
+    num_timesteps: usize,
+    stn_count: usize,
+    gpe_count: usize,
+    ctx_count: usize,
+    edge_resolution: usize,
+  ) -> Self {
     Self {
       v: Array2::zeros((num_timesteps, stn_count)),
       n: Array2::zeros((num_timesteps, stn_count)),
@@ -144,6 +175,7 @@ impl STNHistory {
       s: Array2::zeros((num_timesteps, stn_count)),
       w_g_s: Array2::zeros((gpe_count, stn_count)),
       ca_g_s: Array2::zeros((gpe_count, stn_count)),
+      w_ctx: Array2::zeros((ctx_count, stn_count)),
       i_ext: Array2::zeros((num_timesteps * edge_resolution, stn_count)),
       i_g_s: Array2::zeros((num_timesteps, stn_count)),
     }
@@ -180,6 +212,7 @@ impl STNHistory {
     self.ca.row_mut(0).assign(&bc.ca);
     self.s.row_mut(0).assign(&bc.s);
     self.w_g_s.assign(&bc.w_g_s);
+    self.w_ctx.assign(&bc.w_ctx);
     self.i_ext.assign(&bc.i_ext);
     self
   }
@@ -193,6 +226,7 @@ impl STNHistory {
     self.s.row_mut(it).assign(&y.s);
     self.i_g_s.row_mut(it).assign(&i_g_s);
     self.w_g_s = y.w_g_s.clone();
+    self.w_ctx = y.w_ctx.clone();
     self.ca_g_s = y.ca_g_s.clone();
   }
 
@@ -206,6 +240,7 @@ impl STNHistory {
       s: self.s.row(it),
       w_g_s: self.w_g_s.view(),
       ca_g_s: self.ca_g_s.view(),
+      w_ctx: self.w_ctx.view(),
     }
   }
 }
@@ -225,6 +260,7 @@ where
       s: self * &rhs.s,
       w_g_s: self * &rhs.w_g_s,
       ca_g_s: self * &rhs.ca_g_s,
+      w_ctx: self * &rhs.w_ctx,
     }
   }
 }
@@ -271,6 +307,7 @@ where
   pub s: ArrayBase<T, Ix1>,
   pub w_g_s: ArrayBase<T, Ix2>,
   pub ca_g_s: ArrayBase<T, Ix2>,
+  pub w_ctx: ArrayBase<T, Ix2>,
 }
 
 pub struct DiracDeltaState<T>
@@ -330,9 +367,10 @@ where
     d_stn: &ArrayView1<f64>,
     d_gpe: &ArrayView1<f64>,
     s_gpe: &ArrayView1<f64>,
+    s_ctx: &ArrayView1<f64>,
     i_ext: &ArrayView1<f64>,
   ) -> (STNState<OwnedRepr<T::Elem>>, Array1<f64>) {
-    let Self { v, n, h, r, ca, s, w_g_s, ca_g_s } = self;
+    let Self { v, n, h, r, ca, s, w_g_s, ca_g_s, w_ctx } = self;
     let eta_d: f64 = 0.01; // @TODO -> Factor this into parameters struct
     let eta_p: f64 = 0.0075;
     let f_d: f64 = 0.42;
@@ -361,6 +399,7 @@ where
     let i_ca = p.g_ca * s_oo.powi(2) * (v - p.v_ca);
     let i_ahp = p.g_ahp * (v - p.v_k) * ca / (ca + p.k_1);
     let i_g_s = p.g_g_s * (v - p.v_g_s) * (self.w_g_s.t().dot(s_gpe));
+    let i_ctx = p.g_ctx * (v - p.v_ctx) * (w_ctx.t().dot(s_ctx));
 
     //   let mut dw_g_s = Array2::<f64>::zeros(w_g_s.raw_dim());
     //   let mut _ca_g_s = Array2::<f64>::zeros(ca_g_s.raw_dim());
@@ -371,13 +410,14 @@ where
     //   }
 
     let dy = STNState {
-      v: -i_l - i_k - i_na - &i_t - &i_ca - i_ahp - &i_g_s - i_ext,
+      v: -i_l - i_k - i_na - &i_t - &i_ca - i_ahp - &i_g_s - &i_ctx - i_ext,
       n: p.phi_n * (n_oo - n) / tau_n,
       h: p.phi_h * (h_oo - h) / tau_h,
       r: p.phi_r * (r_oo - r) / tau_r,
       ca: p.eps * ((-i_ca - i_t) - p.k_ca * ca),
       s: p.alpha * h_syn_oo * (1. - s) - p.beta * s,
       w_g_s: Array2::<f64>::zeros(w_g_s.raw_dim()),
+      w_ctx: Array2::<f64>::zeros(w_ctx.raw_dim()),
       ca_g_s: -ca_g_s / p.tau_ca + p.ca_pre * &d_gpe.iax(1) + p.ca_post * &d_stn.iax(0),
     };
 
@@ -401,6 +441,7 @@ where
       s: &self.s + &rhs.s,
       w_g_s: &self.w_g_s + &rhs.w_g_s,
       ca_g_s: &self.w_g_s + &rhs.w_g_s,
+      w_ctx: &self.w_ctx + &rhs.w_ctx,
     }
   }
 }

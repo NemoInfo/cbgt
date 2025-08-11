@@ -234,7 +234,7 @@ pub fn parse_toml_value(k: &str, v: &str) -> toml::Value {
   }
 }
 
-pub fn array3_to_polars_column(name: &str, array: ndarray::ArrayView3<f64>) -> polars::prelude::Column {
+pub fn _array3_to_polars_column(name: &str, array: ndarray::ArrayView3<f64>) -> polars::prelude::Column {
   use polars::prelude::*;
   let [_, nrows, ncols] = *array.shape() else { unreachable!() };
 

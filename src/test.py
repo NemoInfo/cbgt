@@ -9,10 +9,170 @@ import time
 import subprocess
 import sys
 
+np.random.seed(69)
 target_color = "#5e3c99"
 base = LinearSegmentedColormap.from_list("custom_purple", ["white", target_color], N=256)
 cmap = ListedColormap(base(np.linspace(0.25, 1.0, 512)))
 mpl.use('TkAgg')
+cmap = "YlGnBu"
+
+
+def rand_gpe(num):
+  ca = [
+      0.009931221391373412, 0.01105798337560691, 0.008618198042586294, 0.007842254082952149, 0.01009947181199855,
+      0.01439779182000786, 0.01499734401485086, 0.01153249037272892, 0.01131645351818554, 0.01090747666531076
+  ]
+  h = [
+      0.6941693982604106, 0.6960525186649159, 0.6922676967009093, 0.6908829096175084, 0.694450894176868,
+      0.7008187424839692, 0.701701517982433, 0.6967207207137638, 0.6962284698338927, 0.6955334306358607
+  ]
+  n = [
+      0.2185706578168535, 0.2172726252685865, 0.2198825985895934, 0.2208386365344371, 0.218376554433867,
+      0.2139920161919114, 0.2133851309251945, 0.2168122919020363, 0.2171513971203313, 0.2176303246979667
+  ]
+  r = [
+      0.2573659658746555, 0.267633438957204, 0.2467211480536698, 0.2393102961633564, 0.25894821881624, 0.29699756425809,
+      0.3026979450078091, 0.2718222561955378, 0.2692289296543874, 0.265227594196562
+  ]
+  s = [
+      0.000005005384170945523, 0.000004742408605511108, 0.000005285062432830586, 0.000005496855711727898,
+      0.000004965314879070837, 0.000004134036862962592, 0.000004035693901984886, 0.000004652783831094474,
+      0.000004718489668449042, 0.000004813260429223516
+  ]
+  v = [
+      -67.82599080345415, -67.93189025010138, -67.71998331113508, -67.642675227932, -67.84176237771105,
+      -68.20005240297162, -68.25008741948682, -67.96902996444675, -67.94128590225782, -67.90220199361714
+  ]
+  return {
+      "gpe_ca": np.random.choice(ca, size=num, replace=True),
+      "gpe_h": np.random.choice(h, size=num, replace=True),
+      "gpe_n": np.random.choice(n, size=num, replace=True),
+      "gpe_r": np.random.choice(r, size=num, replace=True),
+      "gpe_s": np.random.choice(s, size=num, replace=True),
+      "gpe_v": np.random.choice(v, size=num, replace=True),
+  }
+
+
+def rand_gpi(num):
+  ca = [
+      0.009931221391373412, 0.01105798337560691, 0.008618198042586294, 0.007842254082952149, 0.01009947181199855,
+      0.01439779182000786, 0.01499734401485086, 0.01153249037272892, 0.01131645351818554, 0.01090747666531076
+  ]
+  h = [
+      0.6941693982604106, 0.6960525186649159, 0.6922676967009093, 0.6908829096175084, 0.694450894176868,
+      0.7008187424839692, 0.701701517982433, 0.6967207207137638, 0.6962284698338927, 0.6955334306358607
+  ]
+  n = [
+      0.2185706578168535, 0.2172726252685865, 0.2198825985895934, 0.2208386365344371, 0.218376554433867,
+      0.2139920161919114, 0.2133851309251945, 0.2168122919020363, 0.2171513971203313, 0.2176303246979667
+  ]
+  r = [
+      0.2573659658746555, 0.267633438957204, 0.2467211480536698, 0.2393102961633564, 0.25894821881624, 0.29699756425809,
+      0.3026979450078091, 0.2718222561955378, 0.2692289296543874, 0.265227594196562
+  ]
+  s = [
+      0.000005005384170945523, 0.000004742408605511108, 0.000005285062432830586, 0.000005496855711727898,
+      0.000004965314879070837, 0.000004134036862962592, 0.000004035693901984886, 0.000004652783831094474,
+      0.000004718489668449042, 0.000004813260429223516
+  ]
+  v = [
+      -67.82599080345415, -67.93189025010138, -67.71998331113508, -67.642675227932, -67.84176237771105,
+      -68.20005240297162, -68.25008741948682, -67.96902996444675, -67.94128590225782, -67.90220199361714
+  ]
+  return {
+      "gpi_ca": np.random.choice(ca, size=num, replace=True),
+      "gpi_h": np.random.choice(h, size=num, replace=True),
+      "gpi_n": np.random.choice(n, size=num, replace=True),
+      "gpi_r": np.random.choice(r, size=num, replace=True),
+      "gpi_s": np.random.choice(s, size=num, replace=True),
+      "gpi_v": np.random.choice(v, size=num, replace=True),
+  }
+
+
+def rand_stn(num):
+  ca = [
+      0.2994323366425385, 0.4076730264403847, 0.3271760563827424, 0.2456039126383157, 0.3090126869287847,
+      0.3533066857313201, 0.3668697913124569, 0.3777575381495549, 0.3008309498107221, 0.2631312497961643
+  ]
+  h = [
+      0.5063486245631907, 0.2933274739456392, 0.4828268896903307, 0.5957938758715363, 0.4801708406464686,
+      0.397555659151211, 0.3761635970127477, 0.3316364917935809, 0.4881964058107033, 0.5373898124788108
+  ]
+  n = [
+      0.0301468039831072, 0.04412485475791555, 0.02936940165051648, 0.03307223867110721, 0.02961425249063069,
+      0.02990618866753074, 0.03096707115136645, 0.03603641291454053, 0.02983123244237023, 0.03137696787429014
+  ]
+  r = [
+      0.0295473069771012, 0.07318677802595788, 0.03401991571903244, 0.01899268957583912, 0.0322092810112401,
+      0.04490215539151968, 0.0496024428039565, 0.05982606979469521, 0.03078507359379932, 0.02403333448524015
+  ]
+  s = [
+      0.008821617722180833, 0.007400276913597601, 0.00850582621763913, 0.009886276645187469, 0.00862235586166425,
+      0.00800161199265862, 0.007851916739337694, 0.007654426383227644, 0.008720434017133022, 0.009298664650592724
+  ]
+  v = [
+      -59.62828421888404, -61.0485669306943, -59.9232859246653, -58.70506521874258, -59.81316532105502,
+      -60.41737514151719, -60.57000688576042, -60.77581472006873, -59.72163362685856, -59.20177081754847
+  ]
+
+  return {
+      "stn_ca": np.random.choice(ca, size=num, replace=True),
+      "stn_h": np.random.choice(h, size=num, replace=True),
+      "stn_n": np.random.choice(n, size=num, replace=True),
+      "stn_r": np.random.choice(r, size=num, replace=True),
+      "stn_s": np.random.choice(s, size=num, replace=True),
+      "stn_v": np.random.choice(v, size=num, replace=True),
+  }
+
+
+def rand_str(num):
+  h = [
+      0.5063486245631907, 0.2933274739456392, 0.4828268896903307, 0.5957938758715363, 0.4801708406464686,
+      0.397555659151211, 0.3761635970127477, 0.3316364917935809, 0.4881964058107033, 0.5373898124788108
+  ]
+  n = [
+      0.0301468039831072, 0.04412485475791555, 0.02936940165051648, 0.03307223867110721, 0.02961425249063069,
+      0.02990618866753074, 0.03096707115136645, 0.03603641291454053, 0.02983123244237023, 0.03137696787429014
+  ]
+  r = [
+      0.0295473069771012, 0.07318677802595788, 0.03401991571903244, 0.01899268957583912, 0.0322092810112401,
+      0.04490215539151968, 0.0496024428039565, 0.05982606979469521, 0.03078507359379932, 0.02403333448524015
+  ]
+  s = [
+      0.008821617722180833, 0.007400276913597601, 0.00850582621763913, 0.009886276645187469, 0.00862235586166425,
+      0.00800161199265862, 0.007851916739337694, 0.007654426383227644, 0.008720434017133022, 0.009298664650592724
+  ]
+  v = [
+      -59.62828421888404, -61.0485669306943, -59.9232859246653, -58.70506521874258, -59.81316532105502,
+      -60.41737514151719, -60.57000688576042, -60.77581472006873, -59.72163362685856, -59.20177081754847
+  ]
+
+  return {
+      "str_h": np.random.choice(h, size=num, replace=True),
+      "str_n": np.random.choice(n, size=num, replace=True),
+      "str_r": np.random.choice(r, size=num, replace=True),
+      "str_s": np.random.choice(s, size=num, replace=True),
+      "str_v": np.random.choice(v, size=num, replace=True),
+  }
+
+
+def nearest(rows, cols, n):
+  assert n % 2 == 1
+  diag = np.zeros((rows, cols)).astype(bool)
+  res = np.zeros((rows, cols)).astype(bool)
+  ids = np.linspace(0, cols - 1, rows)
+  ids = np.rint(ids).astype(np.uint)
+  diag[np.arange(rows), ids] = 1
+  n += 1
+  it = 0
+
+  while n > 0:
+    res |= np.roll(diag, it, axis=1)
+    res |= np.roll(diag, -it, axis=1)
+    it += 1
+    n -= 2
+
+  return res.astype(np.float64)
 
 
 def parse_opt(pairs):
@@ -27,72 +187,63 @@ def zeros(time_ms, t):
   return 0.0
 
 
-def uniform(time_ms, n):
-  start, end = 500, 2500
-  return 40. if start < time_ms < end else 0
-
-
-def gpi_i_ext(time_ms, n):
+def ctx_stimuli(t, n):
+  if (0 < t < 500 and n == 49) or (500 < t and n == 0):
+    return 1.0
   return 0.0
 
 
-def oscillatory(time_ms, n):
-  start, end = 500, 2500
-  if time_ms < start or time_ms > end:
-    return 0.0
-
-  period_ms = 1000.0 / 44.0
-  time_in_cycle = (time_ms - start) % period_ms
-
-  if time_in_cycle < (period_ms / 2):
-    return 50.0
-  else:
-    return 0.0
-
-
-def white_noise_stn(time_ms, n):
-  import numpy as np
-  return np.random.normal(loc=10, scale=4)
-
-
-def white_noise_str(time_ms, n):
-  import numpy as np
-  # return np.random.normal(loc=-8, scale=4)
-  return 0
-
-
-def white_noise_gpe(time_ms, n):
-  import numpy as np
-  return np.random.normal(loc=0, scale=0.1)
-
-
-def brown_noise_str(t, n):
-  from noise import pnoise2
-  return abs(pnoise2(t * 0.01, n, octaves=8, persistence=0.5, lacunarity=2.0)) * 20
-
-
-def brown_noise_stn(t, n):
-  from noise import pnoise2
-  return abs(pnoise2(t * 0.01, n, octaves=8, persistence=0.5, lacunarity=2.0)) * 10
+def gpe_i_app(t, n):
+  return -1.2
 
 
 def test(experiment="wave", total_t=2, metrics=None, **opt):
+  num_str = 10     # 50
+  num_stn = 10     # 10
+  num_gpe = 10     # 30
+  num_gpi = 10     # 10
+  num_ctx = 10     # 50
+
+  num_str = 50
+  num_stn = 10
+  num_gpe = 30
+  num_gpi = 10
+  num_ctx = 50
+
   if metrics is None: metrics = []
   rt = cbgt.Network(dt=0.05,
                     total_t=total_t,
                     experiment=experiment,
-                    stn_i_ext=brown_noise_stn,
-                    str_i_ext=brown_noise_str,
+                    gpe_i_app=gpe_i_app,
+                    gpe_i_ext=zeros,
                     gpi_i_ext=zeros,
+                    str_i_ext=zeros,
+                    stn_i_ext=zeros,
+                    ctx_stimuli=ctx_stimuli,
+                    stn_w_g_s=nearest(num_gpe, num_stn, 1),
+                    stn_w_ctx=nearest(num_ctx, num_stn, 3),
+                    str_w_str=nearest(num_str, num_str, 9),
+                    str_w_ctx=nearest(num_str, num_str, 1),
+                    gpe_w_g_g=nearest(num_gpe, num_gpe, 15) - np.eye(num_gpe),
+                    gpe_w_s_g=nearest(num_stn, num_gpe, 3),
+                    gpe_w_str=nearest(num_str, num_gpe, 9),
+                    gpi_w_g_g=nearest(num_gpi, num_gpi, 5) - np.eye(num_gpi),
+                    gpi_w_s_g=nearest(num_stn, num_gpi, 3),
+                    gpi_w_str=nearest(num_str, num_gpi, 9),
+                    str_count=num_str,
+                    stn_count=num_stn,
+                    gpe_count=num_gpe,
+                    gpi_count=num_gpi,
+                    ctx_count=num_ctx,
+                    **rand_str(num_str),
+                    **rand_stn(num_stn),
+                    **rand_gpe(num_gpe),
+                    **rand_gpi(num_gpi),
                     **opt)
   start = time.time()
   rt.run_rk4()
   print(f"\n> Simulated {total_t:.2f}s in {time.time() - start:.2f}s 🚀\n")
   df = rt.to_polars()
-
-  # df_ca_gpe = df["gpe"].with_columns(pl.col("ca_s_g").arr.get(2).alias("ca0"))
-  # df_ca_stn = df["stn"].with_columns(pl.col("ca_g_s").arr.get(2).alias("ca0"))
-  # plot_time_activity([df_ca_stn, df_ca_gpe], ["stn", "gpe"], y="ca0", title="Synaptic Ca", cmap=cmap)
 
   for y in metrics:
     if y == "i_ext":
@@ -104,6 +255,8 @@ def test(experiment="wave", total_t=2, metrics=None, **opt):
     else:
       plot_time_activity([df for df in df.values()], [*df.keys()], y=y, cmap=cmap)
       plt.show(block=False)
+      #plot_time_trace([df for df in df.values()], [*df.keys()], y=y)
+      #plt.show(block=False)
 
   plt.show()
 
@@ -111,19 +264,19 @@ def test(experiment="wave", total_t=2, metrics=None, **opt):
 def main(args):
   np.random.seed(69)
   opt = parse_opt(args.opt)
-  # plt.style.use('dark_background')
-  # plt.rcParams["figure.facecolor"] = "#101418"
-  # plt.rcParams["axes.facecolor"] = "#101418"
+  plt.style.use('dark_background')
+  plt.rcParams["figure.facecolor"] = "#101418"
+  plt.rcParams["axes.facecolor"] = "#101418"
   mpl.rcParams['savefig.transparent'] = True
-  mpl.rcParams['figure.facecolor'] = 'none'
-  mpl.rcParams['axes.facecolor'] = 'none'
+  #mpl.rcParams['figure.facecolor'] = 'none'
+  #mpl.rcParams['axes.facecolor'] = 'none'
   test(experiment=args.experiment, total_t=args.time, metrics=args.plt, **opt)
 
 
 if __name__ == "__main__":
   parser = argparse.ArgumentParser()
   parser.add_argument('experiment', type=str)
-  parser.add_argument('time', type=int)
+  parser.add_argument('time', type=float)
   parser.add_argument('--opt', nargs='*', default=[], help='Key=value pairs')
   parser.add_argument('--plt', nargs='*', default=[], help='Key=value pairs')
   parser.add_argument('--subprocess', action=argparse.BooleanOptionalAction)

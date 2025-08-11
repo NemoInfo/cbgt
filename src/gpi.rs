@@ -1,6 +1,5 @@
 use std::fmt::Debug;
 use std::ops::{Add, Mul};
-use std::rc::Rc;
 
 use log::debug;
 use ndarray::{s, Array1, Array2, ArrayView1, Ix2, OwnedRepr, ViewRepr};
@@ -121,7 +120,7 @@ impl BuilderGPiBoundary {
       .map
       .get("w_str")
       .map(try_toml_value_to_2darray::<f64>)
-      .map_or(Array2::zeros((gpi_count, gpi_count)), |x| x.expect("invalid bc for w_str"));
+      .map_or(Array2::zeros((str_count, gpi_count)), |x| x.expect("invalid bc for w_str"));
     let c_str = self
       .map
       .get("c_str")
@@ -215,7 +214,9 @@ where
     p: &GPiParameters,
     d_gpi: &ArrayView1<f64>,
     d_stn: &ArrayView1<f64>,
+    d_str: &ArrayView1<f64>,
     s_stn: &ArrayView1<f64>,
+    s_str: &ArrayView1<f64>,
     i_ext: &ArrayView1<f64>,
     i_app: &ArrayView1<f64>,
   ) -> GPiState<OwnedRepr<f64>> {
@@ -240,7 +241,7 @@ where
     let i_ahp = p.g_ahp * (v - p.v_k) * ca / (ca + p.k_1);
     let i_s_g = p.g_s_g * (v - p.v_s_g) * (self.w_s_g.t().dot(s_stn));
     let i_g_g = p.g_g_g * (v - p.v_g_g) * (self.w_g_g.t().dot(s));
-    let i_str = p.g_str * (v - p.v_str) * (self.w_str.t().dot(s));
+    let i_str = p.g_str * (v - p.v_str) * (self.w_str.t().dot(s_str));
 
     // Update state
     let dy = GPiState {
@@ -252,10 +253,10 @@ where
       s: p.alpha * h_syn_oo * (1. - s) - p.beta * s,
       w_g_g: ndarray::Array::zeros(w_g_g.raw_dim()), // TODO - no plasticity
       w_s_g: ndarray::Array::zeros(w_s_g.raw_dim()), // TODO - no plasticity
-      w_str: ndarray::Array::zeros(w_s_g.raw_dim()), // TODO - no plasticity
+      w_str: ndarray::Array::zeros(w_str.raw_dim()), // TODO - no plasticity
       ca_g_g: -ca_g_g / p.tau_ca + p.ca_pre * &d_gpi.iax(1) + p.ca_post * &d_gpi.iax(0),
       ca_s_g: -ca_s_g / p.tau_ca + p.ca_pre * &d_stn.iax(1) + p.ca_post * &d_gpi.iax(0),
-      ca_str: -ca_s_g / p.tau_ca + p.ca_pre * &d_stn.iax(1) + p.ca_post * &d_gpi.iax(0),
+      ca_str: -ca_str / p.tau_ca + p.ca_pre * &d_str.iax(1) + p.ca_post * &d_gpi.iax(0),
     };
 
     dy
@@ -391,7 +392,13 @@ pub struct GPiHistory {
 }
 
 impl GPiHistory {
-  pub fn new(num_timesteps: usize, gpi_count: usize, stn_count: usize, edge_resolution: usize) -> Self {
+  pub fn new(
+    num_timesteps: usize,
+    gpi_count: usize,
+    stn_count: usize,
+    str_count: usize,
+    edge_resolution: usize,
+  ) -> Self {
     Self {
       v: Array2::zeros((num_timesteps, gpi_count)),
       n: Array2::zeros((num_timesteps, gpi_count)),
@@ -403,10 +410,10 @@ impl GPiHistory {
       i_app: Array2::zeros((num_timesteps * edge_resolution, gpi_count)),
       w_s_g: Array2::zeros((stn_count, gpi_count)),
       w_g_g: Array2::zeros((gpi_count, gpi_count)),
-      w_str: Array2::zeros((gpi_count, gpi_count)),
+      w_str: Array2::zeros((str_count, gpi_count)),
       ca_s_g: Array2::zeros((stn_count, gpi_count)),
       ca_g_g: Array2::zeros((gpi_count, gpi_count)),
-      ca_str: Array2::zeros((gpi_count, gpi_count)),
+      ca_str: Array2::zeros((str_count, gpi_count)),
     }
   }
 

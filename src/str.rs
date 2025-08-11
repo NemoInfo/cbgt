@@ -30,6 +30,7 @@ pub struct STRPopulationBoundryConditions {
   pub r: Array1<f64>,
   pub s: Array1<f64>,
   pub w_str: Array2<f64>,
+  pub w_ctx: Array2<f64>,
   pub i_ext: Array2<f64>,
 }
 
@@ -40,7 +41,7 @@ impl Build<STR, Boundary> for STRPopulationBoundryConditions {
 pub type BuilderSTRBoundary = Builder<STR, Boundary, STRPopulationBoundryConditions>;
 
 impl Builder<STR, Boundary, STRPopulationBoundryConditions> {
-  pub fn finish(self, str_count: usize, dt: f64, total_t: f64, edge_resolution: u8) -> STRPopulationBoundryConditions {
+  pub fn finish(self, str_count: usize, ctx_count: usize, dt: f64, total_t: f64, edge_resolution: u8) -> STRPopulationBoundryConditions {
     // TODO: Decide what should happen with the defaults?
     // Instead of zero it should panic if top level use_default is set to false
     let zero = Array1::zeros(str_count);
@@ -83,7 +84,20 @@ impl Builder<STR, Boundary, STRPopulationBoundryConditions> {
       .mapv(|x| (x != 0.) as u8 as f64);
     assert_eq!(c_str.shape(), &[str_count, str_count]);
 
-    STRPopulationBoundryConditions { count: str_count, v, n, h, r, s, w_str, i_ext }
+    let w_ctx = self
+      .map
+      .get("w_ctx")
+      .map(try_toml_value_to_2darray::<f64>)
+      .map_or(Array2::zeros((ctx_count, str_count)), |x| x.expect("invalid bc for w_ctx_str"));
+    let c_ctx = self
+      .map
+      .get("c_ctx")
+      .map(try_toml_value_to_2darray::<f64>)
+      .map_or(w_ctx.mapv(|x| (x != 0.) as u8 as f64), |x| x.expect("invalid bc for c_ctx_str"))
+      .mapv(|x| (x != 0.) as u8 as f64);
+    assert_eq!(c_ctx.shape(), &[ctx_count, str_count]);
+
+    STRPopulationBoundryConditions { count: str_count, v, n, h, r, s, w_str, w_ctx, i_ext }
   }
 }
 
@@ -112,10 +126,11 @@ pub struct STRHistory {
   pub i_ext: Array2<f64>,
   pub w_str: Array2<f64>,
   pub ca_syn_str: Array2<f64>,
+  pub w_ctx: Array2<f64>,
 }
 
 impl STRHistory {
-  pub fn new(num_timesteps: usize, str_count: usize, edge_resolution: usize) -> Self {
+  pub fn new(num_timesteps: usize, str_count: usize, ctx_count: usize, edge_resolution: usize) -> Self {
     Self {
       v: Array2::zeros((num_timesteps, str_count)),
       n: Array2::zeros((num_timesteps, str_count)),
@@ -125,6 +140,7 @@ impl STRHistory {
       w_str: Array2::zeros((str_count, str_count)),
       ca_syn_str: Array2::zeros((str_count, str_count)),
       i_ext: Array2::zeros((num_timesteps * edge_resolution, str_count)),
+      w_ctx: Array2::zeros((ctx_count, ctx_count)),
     }
   }
 
@@ -135,6 +151,7 @@ impl STRHistory {
     self.r.row_mut(0).assign(&bc.r);
     self.s.row_mut(0).assign(&bc.s);
     self.w_str.assign(&bc.w_str);
+    self.w_ctx.assign(&bc.w_ctx);
     self.i_ext.assign(&bc.i_ext);
     self
   }
@@ -156,7 +173,7 @@ impl STRHistory {
       s: self.s.row(it),
       w_str: self.w_str.view(),
       ca_syn_str: self.ca_syn_str.view(),
-      a_str,
+      w_ctx: self.w_ctx.view(),
     }
   }
 }
@@ -175,7 +192,7 @@ where
       s: self * &rhs.s,
       w_str: self * &rhs.w_str,
       ca_syn_str: self * &rhs.ca_syn_str,
-      a_str: rhs.a_str.clone(),
+      w_ctx: self * &rhs.w_ctx,
     }
   }
 }
@@ -221,7 +238,7 @@ where
   pub s: ArrayBase<T, Ix1>,
   pub w_str: ArrayBase<T, Ix2>,
   pub ca_syn_str: ArrayBase<T, Ix2>,
-  pub a_str: Rc<Vec<(usize, usize)>>,
+  pub w_ctx: ArrayBase<T, Ix2>,
 }
 
 impl<T> Debug for STRState<T>
@@ -237,8 +254,13 @@ impl<T> STRState<T>
 where
   T: ndarray::Data<Elem = f64>,
 {
-  pub fn dydt(&self, p: &STRParameters, i_ext: &ArrayView1<f64>) -> STRState<OwnedRepr<T::Elem>> {
-    let Self { v, n, h, r, s, w_str, ca_syn_str, a_str } = self;
+  pub fn dydt(
+    &self,
+    p: &STRParameters,
+    s_ctx: &ArrayView1<f64>,
+    i_ext: &ArrayView1<f64>,
+  ) -> STRState<OwnedRepr<T::Elem>> {
+    let Self { v, n, h, r, s, w_str, ca_syn_str, w_ctx } = self;
 
     let n_oo = x_oo(v, p.tht_n, p.sig_n);
     let m_oo = x_oo(v, p.tht_m, p.sig_m);
@@ -254,18 +276,19 @@ where
     let i_k = p.g_k * n.powi(4) * (v - p.v_k);
     let i_na = p.g_na * m_oo.powi(3) * h * (v - p.v_na);
     let i_str = p.g_str * (v - p.v_str) * (w_str.t().dot(s));
+    let i_ctx = p.g_ctx * (v - p.v_ctx) * (w_ctx.t().dot(s_ctx));
 
     // TODO maybe add plasticity here
 
     STRState {
-      v: -i_l - i_k - i_na - i_str - i_ext,
+      v: -i_l - i_k - i_na - i_str - i_ctx - i_ext,
       n: p.phi_n * (n_oo - n) / tau_n,
       h: p.phi_h * (h_oo - h) / tau_h,
       r: p.phi_r * (r_oo - r) / tau_r,
       s: p.alpha * h_syn_oo * (1. - s) - p.beta * s,
       w_str: Array2::<f64>::zeros(w_str.raw_dim()),
       ca_syn_str: Array2::<f64>::zeros(ca_syn_str.raw_dim()),
-      a_str: a_str.clone(),
+      w_ctx: Array2::<f64>::zeros(w_ctx.raw_dim()),
     }
   }
 }
@@ -283,9 +306,9 @@ where
       h: &self.h + &rhs.h,
       r: &self.r + &rhs.r,
       s: &self.s + &rhs.s,
-      w_str: &self.w_str + &rhs.w_str, // TODO use a_str to do sparse add
+      w_str: &self.w_str + &rhs.w_str,
       ca_syn_str: &self.ca_syn_str + &rhs.ca_syn_str,
-      a_str: rhs.a_str.clone(),
+      w_ctx: &self.w_ctx + &rhs.w_ctx,
     }
   }
 }

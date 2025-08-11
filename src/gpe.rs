@@ -127,7 +127,7 @@ impl BuilderGPeBoundary {
       .map(try_toml_value_to_2darray::<f64>)
       .map_or(w_str.mapv(|x| (x != 0.) as u8 as f64), |x| x.expect("invalid bc for c_g_g"))
       .mapv(|x| (x != 0.) as u8 as f64);
-    assert_eq!(c_str.shape(), &[gpe_count, gpe_count]);
+    assert_eq!(c_str.shape(), &[str_count, gpe_count]);
 
     GPePopulationBoundryConditions {
       count: gpe_count,
@@ -405,7 +405,13 @@ pub struct GPeHistory {
 }
 
 impl GPeHistory {
-  pub fn new(num_timesteps: usize, gpe_count: usize, stn_count: usize, edge_resolution: usize) -> Self {
+  pub fn new(
+    num_timesteps: usize,
+    gpe_count: usize,
+    stn_count: usize,
+    str_count: usize,
+    edge_resolution: usize,
+  ) -> Self {
     Self {
       v: Array2::zeros((num_timesteps, gpe_count)),
       n: Array2::zeros((num_timesteps, gpe_count)),
@@ -417,10 +423,10 @@ impl GPeHistory {
       i_app: Array2::zeros((num_timesteps * edge_resolution, gpe_count)),
       w_s_g: Array2::zeros((stn_count, gpe_count)),
       w_g_g: Array2::zeros((gpe_count, gpe_count)),
-      w_str: Array2::zeros((gpe_count, gpe_count)),
+      w_str: Array2::zeros((str_count, gpe_count)),
       ca_s_g: Array2::zeros((stn_count, gpe_count)),
       ca_g_g: Array2::zeros((gpe_count, gpe_count)),
-      ca_str: Array2::zeros((gpe_count, gpe_count)),
+      ca_str: Array2::zeros((str_count, gpe_count)),
     }
   }
 

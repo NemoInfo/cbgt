@@ -1,6 +1,6 @@
-use numpy::{PyArray1, PyArrayDyn, PyArrayMethods, PyUntypedArrayMethods};
-use pyo3::{prelude::*, IntoPyObjectExt};
-use std::{borrow::Borrow, collections::HashMap};
+use numpy::{PyArrayDyn, PyArrayMethods, PyUntypedArrayMethods};
+use pyo3::{prelude::*};
+use std::{collections::HashMap};
 use struct_field_names_as_array::FieldNamesAsSlice;
 
 use crate::{util::*, PYF_FILE_NAME, TMP_PYF_FILE_NAME, TMP_PYF_FILE_PATH};

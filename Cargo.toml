@@ -9,6 +9,8 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 ndarray = "0.16.1"
+ndarray-rand = "0.15.0"
+rand_isaac = "0.3.0"
 pyo3 = "0.23.0"
 numpy = "0.23.0"
 pyo3-polars = "0.20.0"

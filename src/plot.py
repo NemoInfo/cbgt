@@ -4,33 +4,23 @@ from typing import Any
 from matplotlib.ticker import FormatStrFormatter
 
 
-def plot_time_activity(dfs,
-                       labels,
-                       title=None,
-                       cmap="gray_r",
-                       file=None,
-                       y="v",
-                       unit="",
-                       vmax=1,
-                       vmin=0,
-                       max_num_neurons=30):
+def plot_time_activity(dfs, labels, title=None, cmap="gray_r", file=None, y="v", unit="", vmax=1, vmin=0):
   assert len(dfs) != 0
   _vmin, _vmax = vmin, vmax
 
   unit = f"({unit})" if unit != "" else unit
   dt = dfs[0]["time"][1]
 
-  xs = [np.stack(df[y]) for df in dfs]
-  num_neurons = min(sum([x.shape[1] for x in xs]), max_num_neurons * len(xs))
+  xs = [np.stack(df[y]) for df in dfs if y in df]
 
-  fig, axs = plt.subplots(len(xs), 1, sharex=True, figsize=(8, num_neurons * 0.3))
+  fig, axs = plt.subplots(len(xs), 1, sharex=True, figsize=(8, 10 * 0.3))
   axs = np.atleast_1d(axs)
 
   im: Any = None
   for ax, x, label in zip(axs, xs, labels):
-    vmax = max(_vmax, x.T[:max_num_neurons].max())
-    vmin = min(_vmin, x.T[:max_num_neurons].min())
-    im = ax.imshow(x.T[:max_num_neurons], aspect='auto', cmap=cmap, interpolation='nearest', vmin=vmin, vmax=vmax)
+    vmax = max(_vmax, x.T[:].max())
+    vmin = min(_vmin, x.T[:].min())
+    im = ax.imshow(x.T[:], aspect='auto', cmap=cmap, interpolation='nearest', vmin=vmin, vmax=vmax)
     ax.set_yticks([0, x.shape[1] - 1])
     ax.set_yticklabels([1, x.shape[1]])
     ax.set_ylabel(f"{label} #", rotation=0, fontsize=14, labelpad=15)

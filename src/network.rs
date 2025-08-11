@@ -12,6 +12,9 @@ use numpy::IntoPyArray;
 use pyo3::{prelude::*, types::PyDict};
 use std::io::Write;
 
+use crate::ctx::ctx_syn_into_compressed_polars_df;
+use crate::ctx::BuilderCTXBoundary;
+use crate::ctx::CTXConfig;
 use crate::gpe::*;
 use crate::gpi::*;
 use crate::parameters::*;
@@ -39,6 +42,7 @@ pub struct Network {
   pub gpe_parameters: GPeParameters,
   pub gpi_states: GPiHistory,
   pub gpi_parameters: GPiParameters,
+  pub ctx_syn: Array2<f64>,
 }
 
 impl Network {
@@ -57,6 +61,7 @@ impl Network {
     let gpe = &mut self.gpe_states;
     let gpi = &mut self.gpi_states;
     let str = &mut self.str_states;
+    let ctx = &self.ctx_syn;
 
     let mut dd_stn = DiracDeltaState::new(stn.v.raw_dim());
     let d_stn_ref = unsafe { ndarray::ArrayView2::from_shape_ptr(dd_stn.d.raw_dim(), dd_stn.d.as_ptr()) };
@@ -84,6 +89,10 @@ impl Network {
     let s_str_ref = unsafe { ndarray::ArrayView1::from_shape_ptr(s_str_shared.len(), s_str_shared.as_ptr()) };
     let mut s_str_mut =
       unsafe { ndarray::ArrayViewMut1::from_shape_ptr(s_str_shared.len(), s_str_shared.as_mut_ptr()) };
+    let mut s_ctx_shared = ctx.row(0).to_owned();
+    let s_ctx_ref = unsafe { ndarray::ArrayView1::from_shape_ptr(s_ctx_shared.len(), s_ctx_shared.as_ptr()) };
+    let mut s_ctx_mut =
+      unsafe { ndarray::ArrayViewMut1::from_shape_ptr(s_ctx_shared.len(), s_ctx_shared.as_mut_ptr()) };
 
     let str_a_str: Vec<(usize, usize)> =
       str.w_str.indexed_iter().filter_map(|((i, j), &v)| if v != 0. { Some((i, j)) } else { None }).collect();
@@ -111,6 +120,7 @@ impl Network {
           let yp = &stn.row(it);
           stn_barrier.sym_sync_call(|| {
             s_stn_mut.assign(&yp.s);
+            s_ctx_mut.assign(&ctx.row(edge_it));
             dd_stn.update(&yp.v, dt, it);
           });
           d_gpi_mut.row_mut(it).assign(&stn.ca_g_s.row(0));
@@ -118,10 +128,13 @@ impl Network {
           let d_stn = d_stn_ref.row(it);
           let d_gpe = d_gpe_ref.row(it);
 
-          let (k1, i_g_s) = yp.dydt(&stn_p, &d_stn, &d_gpe, &s_gpe_ref, &stn.i_ext.row(edge_it));
-          let (k2, _) = (yp + &(dt / 2. * &k1)).dydt(&stn_p, &d_stn, &d_gpe, &s_gpe_ref, &stn.i_ext.row(edge_it + 1));
-          let (k3, _) = (yp + &(dt / 2. * &k2)).dydt(&stn_p, &d_stn, &d_gpe, &s_gpe_ref, &stn.i_ext.row(edge_it + 1));
-          let (k4, _) = (yp + &(dt * &k3)).dydt(&stn_p, &d_stn, &d_gpe, &s_gpe_ref, &stn.i_ext.row(edge_it + 2));
+          let (k1, i_g_s) = yp.dydt(&stn_p, &d_stn, &d_gpe, &s_gpe_ref, &s_ctx_ref, &stn.i_ext.row(edge_it));
+          let (k2, _) =
+            (yp + &(dt / 2. * &k1)).dydt(&stn_p, &d_stn, &d_gpe, &s_gpe_ref, &s_ctx_ref, &stn.i_ext.row(edge_it + 1));
+          let (k3, _) =
+            (yp + &(dt / 2. * &k2)).dydt(&stn_p, &d_stn, &d_gpe, &s_gpe_ref, &s_ctx_ref, &stn.i_ext.row(edge_it + 1));
+          let (k4, _) =
+            (yp + &(dt * &k3)).dydt(&stn_p, &d_stn, &d_gpe, &s_gpe_ref, &s_ctx_ref, &stn.i_ext.row(edge_it + 2));
           let yn = yp + dt / 6. * (k1 + 2. * k2 + 2. * k3 + k4);
           stn.insert(it + 1, &yn, i_g_s.view());
         }
@@ -140,10 +153,10 @@ impl Network {
             dd_str.update(&yp.v, dt, it);
           });
 
-          let k1 = yp.dydt(&str_p, &str.i_ext.row(edge_it));
-          let k2 = (yp + &(dt / 2. * &k1)).dydt(&str_p, &str.i_ext.row(edge_it + 1));
-          let k3 = (yp + &(dt / 2. * &k2)).dydt(&str_p, &str.i_ext.row(edge_it + 1));
-          let k4 = (yp + &(dt * &k3)).dydt(&str_p, &str.i_ext.row(edge_it + 2));
+          let k1 = yp.dydt(&str_p, &s_ctx_ref, &str.i_ext.row(edge_it));
+          let k2 = (yp + &(dt / 2. * &k1)).dydt(&str_p, &s_ctx_ref, &str.i_ext.row(edge_it + 1));
+          let k3 = (yp + &(dt / 2. * &k2)).dydt(&str_p, &s_ctx_ref, &str.i_ext.row(edge_it + 1));
+          let k4 = (yp + &(dt * &k3)).dydt(&str_p,&s_ctx_ref, &str.i_ext.row(edge_it + 2));
           let yn = yp + dt / 6. * (k1 + 2. * k2 + 2. * k3 + k4);
           str.insert(it + 1, &yn);
         }
@@ -217,15 +230,28 @@ impl Network {
             s_gpi_mut.assign(&yp.s);
             dd_gpi.update(&yp.v, dt, it);
           });
-          let d_stn = d_stn_ref.row(it);
-          let d_gpi = d_gpi_ref.row(it);
 
-          let k1 = yp.dydt(&gpi_p, &d_gpi, &d_stn, &s_stn_ref, &gpi.i_ext.row(edge_it), &gpi.i_app.row(edge_it));
+          let d_gpi = d_gpi_ref.row(it);
+          let d_stn = d_stn_ref.row(it);
+          let d_str = d_str_ref.row(it);
+
+          let k1 = yp.dydt(
+            &gpi_p,
+            &d_gpi,
+            &d_stn,
+            &d_str,
+            &s_stn_ref,
+            &s_str_ref,
+            &gpi.i_ext.row(edge_it),
+            &gpi.i_app.row(edge_it),
+          );
           let k2 = (yp + &(dt / 2. * &k1)).dydt(
             &gpi_p,
             &d_gpi,
             &d_stn,
+            &d_str,
             &s_stn_ref,
+            &s_str_ref,
             &gpi.i_ext.row(edge_it + 1),
             &gpi.i_app.row(edge_it + 1),
           );
@@ -233,7 +259,9 @@ impl Network {
             &gpi_p,
             &d_gpi,
             &d_stn,
+            &d_str,
             &s_stn_ref,
+            &s_str_ref,
             &gpi.i_ext.row(edge_it + 1),
             &gpi.i_app.row(edge_it + 1),
           );
@@ -241,7 +269,9 @@ impl Network {
             &gpi_p,
             &d_gpi,
             &d_stn,
+            &d_str,
             &s_stn_ref,
+            &s_str_ref,
             &gpi.i_ext.row(edge_it + 2),
             &gpi.i_app.row(edge_it + 2),
           );
@@ -269,7 +299,7 @@ impl Network {
   #[new]
   #[pyo3(signature=(dt=0.01, total_t=2., experiment=None, experiment_version=None, 
                     parameters_file=None, boundry_ic_file=None, use_default=true,
-                    save_dir=Some("/tmp/cbgt_last_model".to_owned()), max_integrator_memory=1_000_000_000, **kwds))]
+                    save_dir=Some("/tmp/cbgt_last_model".to_owned()), _max_integrator_memory=1_000_000_000, **kwds))]
   fn new_py(
     dt: f64,
     mut total_t: f64,
@@ -279,7 +309,7 @@ impl Network {
     boundry_ic_file: Option<&str>,
     use_default: bool,
     save_dir: Option<String>, // Maybe add datetime to temp save
-    max_integrator_memory: usize,
+    _max_integrator_memory: usize,
     kwds: Option<&Bound<'_, PyDict>>,
   ) -> Self {
     total_t *= 1e3;
@@ -296,13 +326,15 @@ impl Network {
     let mut gpe_kw_config = GPeConfig::new();
     let mut gpi_kw_config = GPiConfig::new();
     let mut str_kw_config = STRConfig::new();
+    let mut ctx_kw_config = CTXConfig::new();
 
     if let Some(kwds) = kwds {
       for (key, val) in kwds {
         if !(stn_kw_config.update_from_py(&key, &val)
           || gpe_kw_config.update_from_py(&key, &val)
           || gpi_kw_config.update_from_py(&key, &val)
-          || str_kw_config.update_from_py(&key, &val))
+          || str_kw_config.update_from_py(&key, &val)
+          || ctx_kw_config.update_from_py(&key, &val))
         {
           panic!("Unexpected key word argument {}", key);
         }
@@ -318,46 +350,53 @@ impl Network {
     let (stn_kw_params, stn_kw_bcs) = stn_kw_config.into_maps(&mut pyf_src);
     let (gpe_kw_params, gpe_kw_bcs) = gpe_kw_config.into_maps(&mut pyf_src);
     let (gpi_kw_params, gpi_kw_bcs) = gpi_kw_config.into_maps(&mut pyf_src);
+    let (ctx_kw_params, ctx_kw_bcs) = ctx_kw_config.into_maps(&mut pyf_src);
 
     let str_parameters = BuilderSTRParameters::build(str_kw_params, parameters_file, experiment, use_default).finish();
     let stn_parameters = BuilderSTNParameters::build(stn_kw_params, parameters_file, experiment, use_default).finish();
     let gpe_parameters = BuilderGPeParameters::build(gpe_kw_params, parameters_file, experiment, use_default).finish();
     let gpi_parameters = BuilderGPiParameters::build(gpi_kw_params, parameters_file, experiment, use_default).finish();
+    let ctx_parameters = BuilderCTXParameters::build(ctx_kw_params, parameters_file, experiment, use_default).finish();
 
-    log::debug!("{:?}", stn_kw_bcs);
+    log::debug!("{:?}", ctx_kw_bcs);
     let mut str_bcs_builder = BuilderSTRBoundary::build(str_kw_bcs, boundry_ic_file, experiment, use_default);
     let mut stn_bcs_builder = BuilderSTNBoundary::build(stn_kw_bcs, boundry_ic_file, experiment, use_default);
     let mut gpe_bcs_builder = BuilderGPeBoundary::build(gpe_kw_bcs, boundry_ic_file, experiment, use_default);
     let mut gpi_bcs_builder = BuilderGPiBoundary::build(gpi_kw_bcs, boundry_ic_file, experiment, use_default);
+    let mut ctx_bcs_builder = BuilderCTXBoundary::build(ctx_kw_bcs, boundry_ic_file, experiment, use_default);
 
-    log::debug!("{:?}", stn_bcs_builder);
+    log::debug!("{:?}", ctx_bcs_builder);
     let str_count = str_bcs_builder.get_count().expect("str_count not found");
     let stn_count = stn_bcs_builder.get_count().expect("stn_count not found");
     let gpe_count = gpe_bcs_builder.get_count().expect("gpe_count not found");
     let gpi_count = gpi_bcs_builder.get_count().expect("gpi_count not found");
+    let ctx_count = ctx_bcs_builder.get_count().expect("ctx_count not found");
 
     str_bcs_builder.extends_pyf_src(&mut pyf_src);
     stn_bcs_builder.extends_pyf_src(&mut pyf_src);
     gpe_bcs_builder.extends_pyf_src(&mut pyf_src);
     gpi_bcs_builder.extends_pyf_src(&mut pyf_src);
+    ctx_bcs_builder.extends_pyf_src(&mut pyf_src);
 
     let str_qual_names = str_bcs_builder.get_callable_qnames();
     let stn_qual_names = stn_bcs_builder.get_callable_qnames();
     let gpe_qual_names = gpe_bcs_builder.get_callable_qnames();
     let gpi_qual_names = gpi_bcs_builder.get_callable_qnames();
+    let ctx_qual_names = ctx_bcs_builder.get_callable_qnames();
     log::debug!("{:?}", pyf_src);
     let pyf_file = write_temp_pyf_file(pyf_src);
 
     let num_timesteps: usize = (total_t / dt) as usize;
     println!("{num_timesteps}");
-    let str_bcs = str_bcs_builder.finish(str_count, dt, total_t, 2);
-    let stn_bcs = stn_bcs_builder.finish(stn_count, gpe_count, dt, total_t, 2);
+    let str_bcs = str_bcs_builder.finish(str_count, ctx_count, dt, total_t, 2);
+    let stn_bcs = stn_bcs_builder.finish(stn_count, gpe_count, ctx_count, dt, total_t, 2);
     let gpe_bcs = gpe_bcs_builder.finish(gpe_count, stn_count, str_count, dt, total_t, 2);
     let gpi_bcs = gpi_bcs_builder.finish(gpi_count, stn_count, str_count, dt, total_t, 2);
+    let ctx_bcs = ctx_bcs_builder.finish(ctx_count, dt, total_t, 2);
 
     if let Some(save_dir) = &save_dir {
       // @TODO save gpi and str as well
-      write_parameter_file(&stn_parameters, &gpe_parameters, save_dir);
+      write_parameter_file(&stn_parameters, &gpe_parameters, save_dir); // TODO add other nuclei
       write_boundary_file(
         &stn_bcs,
         &gpe_bcs,
@@ -367,15 +406,16 @@ impl Network {
         &stn_qual_names,
         &gpe_qual_names,
         &gpi_qual_names,
-        &str_qual_names,
+        &str_qual_names, // Write other nuclei
       );
       std::fs::copy(&pyf_file, format!("{save_dir}/{PYF_FILE_NAME}.py")).unwrap();
     }
 
-    let str_states = STRHistory::new(num_timesteps, str_count, 2).with_bcs(str_bcs);
-    let stn_states = STNHistory::new(num_timesteps, stn_count, gpe_count, 2).with_bcs(stn_bcs);
-    let gpe_states = GPeHistory::new(num_timesteps, gpe_count, stn_count, 2).with_bcs(gpe_bcs);
-    let gpi_states = GPiHistory::new(num_timesteps, gpi_count, stn_count, 2).with_bcs(gpi_bcs);
+    let str_states = STRHistory::new(num_timesteps, str_count, ctx_count, 2).with_bcs(str_bcs);
+    let stn_states = STNHistory::new(num_timesteps, stn_count, gpe_count, ctx_count, 2).with_bcs(stn_bcs);
+    let gpe_states = GPeHistory::new(num_timesteps, gpe_count, stn_count, str_count, 2).with_bcs(gpe_bcs);
+    let gpi_states = GPiHistory::new(num_timesteps, gpi_count, stn_count, str_count, 2).with_bcs(gpi_bcs);
+    let ctx_syn = ctx_bcs.to_syn_ctx(&ctx_parameters, dt / 2.);
 
     std::fs::remove_file(pyf_file).expect("File was just created, it should exist.");
 
@@ -390,6 +430,7 @@ impl Network {
       gpi_parameters,
       str_states,
       str_parameters,
+      ctx_syn,
     }
   }
 
@@ -410,12 +451,14 @@ impl Network {
     let gpe = self.gpe_states.into_compressed_polars_df(self.dt, dt, 2);
     let gpi = self.gpi_states.into_compressed_polars_df(self.dt, dt, 2);
     let str = self.str_states.into_compressed_polars_df(self.dt, dt, 2);
+    let ctx = ctx_syn_into_compressed_polars_df(&self.ctx_syn, self.dt, dt, 2);
 
     let dict = PyDict::new(py);
     dict.set_item("stn", pyo3_polars::PyDataFrame(stn)).expect("Could not add insert STN Polars DataFrame");
     dict.set_item("gpe", pyo3_polars::PyDataFrame(gpe)).expect("Could not add insert GPe Polars DataFrame");
     dict.set_item("gpi", pyo3_polars::PyDataFrame(gpi)).expect("Could not add insert GPi Polars DataFrame");
     dict.set_item("str", pyo3_polars::PyDataFrame(str)).expect("Could not add insert STR Polars DataFrame");
+    dict.set_item("ctx", pyo3_polars::PyDataFrame(ctx)).expect("Could not add insert STR Polars DataFrame");
 
     dict.into()
   }
@@ -445,7 +488,9 @@ impl Network {
     let mut gpi = self.gpi_states.into_compressed_polars_df(self.dt, dt, 2);
     write_parquet("gpi.parquet", &mut gpi);
     drop(gpi);
-
+    let mut ctx = ctx_syn_into_compressed_polars_df(&self.ctx_syn, self.dt, dt, 2);
+    write_parquet("ctx.parquet", &mut ctx);
+    drop(ctx);
     Ok(())
   }
 
@@ -460,12 +505,4 @@ impl Network {
 }
 
 #[cfg(test)]
-mod size_test {
-  use crate::stn::STNHistory;
-
-  #[test]
-  fn thing() {
-    println!("{}", &STNHistory::new(160000, 10, 30, 2).size());
-    assert!(false);
-  }
-}
+mod size_test {}

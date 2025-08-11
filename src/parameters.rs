@@ -1,11 +1,24 @@
 use serde::{Deserialize, Serialize};
 use struct_field_names_as_array::FieldNamesAsSlice;
 
+use crate::ctx::CTX;
 use crate::gpe::GPe;
 use crate::gpi::GPi;
 use crate::stn::STN;
 use crate::str::STR;
 use crate::types::*;
+
+#[derive(Deserialize, Serialize, Debug, FieldNamesAsSlice, Clone, Default)]
+#[allow(unused)]
+pub struct CTXParameters {
+  pub base_rate: f64,
+  pub stimulated_rate: f64,
+  pub max_rate: f64,
+  pub sig_s: f64,
+  pub min_isi: f64,
+  pub syn_rayleigh_sig: f64,
+  pub syn_kernel_len: f64,
+}
 
 #[derive(Deserialize, Serialize, Debug, FieldNamesAsSlice, Clone, Default)]
 #[allow(unused)]
@@ -18,6 +31,7 @@ pub struct STRParameters {
   pub g_ca: f64,  // nS/um^2
   pub g_ahp: f64, // nS/um^2
   pub g_str: f64, // nS/um^2
+  pub g_ctx: f64, // nS/um^2
 
   // Reversal potentials
   pub v_l: f64,  // mV
@@ -25,6 +39,7 @@ pub struct STRParameters {
   pub v_na: f64, // mV
   pub v_ca: f64, // mV
   pub v_str: f64,
+  pub v_ctx: f64,
 
   // Time constants
   pub tau_h_1: f64, // ms
@@ -98,6 +113,7 @@ pub struct STNParameters {
   pub g_ca: f64,  // nS/um^2
   pub g_ahp: f64, // nS/um^2
   pub g_g_s: f64, // nS/um^2
+  pub g_ctx: f64, // nS/um^2
 
   // Reversal potentials
   pub v_l: f64,   // mV
@@ -105,6 +121,7 @@ pub struct STNParameters {
   pub v_na: f64,  // mV
   pub v_ca: f64,  // mV
   pub v_g_s: f64, // -85. // mV [MISMATCH]
+  pub v_ctx: f64, // -85. // mV [MISMATCH]
 
   // Time constants
   pub tau_h_1: f64, // ms
@@ -166,13 +183,6 @@ pub struct STNParameters {
   pub b_const: f64,
 
   // STDP
-  pub tau_pre: f64,      // [DEPRECATED]
-  pub tau_post: f64,     // [DEPRECATED]
-  pub tht_spike: f64,    // [DEPRECATED]
-  pub min_dt_spike: f64, // [DEPRECATED]
-  pub a_pre: f64,        // [DEPRECATED]
-  pub a_post: f64,       // [DEPRECATED]
-
   pub tau_ca: f64,
   pub ca_pre: f64,
   pub ca_post: f64,
@@ -255,12 +265,6 @@ pub struct GPeParameters {
   pub sig_g_h: f64,
 
   // STDP
-  pub tau_pre: f64,
-  pub tau_post: f64,
-  pub tht_spike: f64,
-  pub min_dt_spike: f64,
-  pub a_pre: f64,
-  pub a_post: f64,
   pub tau_ca: f64,
   pub ca_pre: f64,
   pub ca_post: f64,
@@ -341,12 +345,6 @@ pub struct GPiParameters {
   pub sig_g_h: f64,
 
   // STDP
-  pub tau_pre: f64,
-  pub tau_post: f64,
-  pub tht_spike: f64,
-  pub min_dt_spike: f64,
-  pub a_pre: f64,
-  pub a_post: f64,
   pub tau_ca: f64,
   pub ca_pre: f64,
   pub ca_post: f64,
@@ -356,7 +354,13 @@ impl Build<STR, Parameters> for STRParameters {}
 impl Build<STN, Parameters> for STNParameters {}
 impl Build<GPe, Parameters> for GPeParameters {}
 impl Build<GPi, Parameters> for GPiParameters {}
+impl Build<CTX, Parameters> for CTXParameters {}
 
+impl PostInit for CTXParameters {
+  fn post_init(self) -> Self {
+    Self { syn_kernel_len: f64::sqrt(-2. * f64::ln(1. - 0.95)) * self.syn_rayleigh_sig, ..self }
+  }
+}
 impl PostInit for GPeParameters {}
 impl PostInit for GPiParameters {}
 impl PostInit for STRParameters {}
@@ -370,6 +374,7 @@ pub type BuilderSTRParameters = Builder<STR, Parameters, STRParameters>;
 pub type BuilderSTNParameters = Builder<STN, Parameters, STNParameters>;
 pub type BuilderGPeParameters = Builder<GPe, Parameters, GPeParameters>;
 pub type BuilderGPiParameters = Builder<GPi, Parameters, GPiParameters>;
+pub type BuilderCTXParameters = Builder<CTX, Parameters, CTXParameters>;
 
 //#[cfg(test)]
 //mod parameters {
