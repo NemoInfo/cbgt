@@ -1,7 +1,6 @@
 use std::fmt::Debug;
 use std::ops::Add;
 use std::ops::Mul;
-use std::rc::Rc;
 
 use log::debug;
 use ndarray::{s, Array1, Array2, ArrayBase, ArrayView1, Ix1, Ix2, OwnedRepr, ViewRepr};
@@ -41,7 +40,14 @@ impl Build<STR, Boundary> for STRPopulationBoundryConditions {
 pub type BuilderSTRBoundary = Builder<STR, Boundary, STRPopulationBoundryConditions>;
 
 impl Builder<STR, Boundary, STRPopulationBoundryConditions> {
-  pub fn finish(self, str_count: usize, ctx_count: usize, dt: f64, total_t: f64, edge_resolution: u8) -> STRPopulationBoundryConditions {
+  pub fn finish(
+    self,
+    str_count: usize,
+    ctx_count: usize,
+    dt: f64,
+    total_t: f64,
+    edge_resolution: u8,
+  ) -> STRPopulationBoundryConditions {
     // TODO: Decide what should happen with the defaults?
     // Instead of zero it should panic if top level use_default is set to false
     let zero = Array1::zeros(str_count);
@@ -164,7 +170,7 @@ impl STRHistory {
     self.s.row_mut(it).assign(&y.s);
   }
 
-  pub fn row<'a>(&'a self, it: usize, a_str: Rc<Vec<(usize, usize)>>) -> STRState<ViewRepr<&'a f64>> {
+  pub fn row<'a>(&'a self, it: usize) -> STRState<ViewRepr<&'a f64>> {
     STRState {
       v: self.v.row(it),
       n: self.n.row(it),

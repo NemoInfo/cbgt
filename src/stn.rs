@@ -33,7 +33,6 @@ pub struct STNPopulationBoundryConditions {
 
   // Connection Matrice
   pub w_g_s: Array2<f64>,
-  pub c_g_s: Array2<f64>,
   pub w_ctx: Array2<f64>,
 }
 
@@ -87,12 +86,6 @@ impl Builder<STN, Boundary, STNPopulationBoundryConditions> {
       .get("w_g_s")
       .map(try_toml_value_to_2darray::<f64>)
       .map_or(Array2::zeros((gpe_count, stn_count)), |x| x.expect("invalid bc for w_g_s"));
-    let c_g_s = self
-      .map
-      .get("c_g_s")
-      .map(try_toml_value_to_2darray::<f64>)
-      .map_or(w_g_s.mapv(|x| (x != 0.) as u8 as f64), |x| x.expect("invalid bc for c_g_s"))
-      .mapv(|x| (x != 0.) as u8 as f64);
     assert_eq!(w_g_s.shape(), &[gpe_count, stn_count]);
 
     let w_ctx = self
@@ -100,29 +93,25 @@ impl Builder<STN, Boundary, STNPopulationBoundryConditions> {
       .get("w_ctx")
       .map(try_toml_value_to_2darray::<f64>)
       .map_or(Array2::zeros((ctx_count, stn_count)), |x| x.expect("invalid bc for w_ctx"));
-    let c_ctx = self
-      .map
-      .get("c_ctx")
-      .map(try_toml_value_to_2darray::<f64>)
-      .map_or(w_ctx.mapv(|x| (x != 0.) as u8 as f64), |x| x.expect("invalid bc for c_ctx"))
-      .mapv(|x| (x != 0.) as u8 as f64);
     assert_eq!(w_ctx.shape(), &[ctx_count, stn_count]);
 
-    STNPopulationBoundryConditions { count: stn_count, v, n, h, r, ca, s, w_g_s, c_g_s, w_ctx, i_ext }
+    STNPopulationBoundryConditions { count: stn_count, v, n, h, r, ca, s, w_g_s, w_ctx, i_ext }
   }
 }
 
 impl STNPopulationBoundryConditions {
   pub fn to_toml(&self, i_ext_py_qualified_name: &str) -> toml::Value {
+    let Self { count, v, h, n, r, ca, w_g_s, w_ctx, s, .. } = self;
     let mut table = toml::value::Table::new();
-    table.insert("count".to_owned(), (self.count as i64).into());
-    table.insert("v".to_owned(), self.v.to_vec().into());
-    table.insert("n".to_owned(), self.n.to_vec().into());
-    table.insert("h".to_owned(), self.h.to_vec().into());
-    table.insert("r".to_owned(), self.r.to_vec().into());
-    table.insert("ca".to_owned(), self.ca.to_vec().into());
-    table.insert("s".to_owned(), self.s.to_vec().into());
-    table.insert("w_g_s".to_owned(), self.w_g_s.rows().into_iter().map(|x| x.to_vec()).collect::<Vec<_>>().into());
+    table.insert("count".to_owned(), (*count as i64).into());
+    table.insert("v".to_owned(), v.to_vec().into());
+    table.insert("n".to_owned(), n.to_vec().into());
+    table.insert("h".to_owned(), h.to_vec().into());
+    table.insert("r".to_owned(), r.to_vec().into());
+    table.insert("ca".to_owned(), ca.to_vec().into());
+    table.insert("s".to_owned(), s.to_vec().into());
+    table.insert("w_g_s".to_owned(), w_g_s.rows().into_iter().map(|x| x.to_vec()).collect::<Vec<_>>().into());
+    table.insert("w_ctx".to_owned(), w_ctx.rows().into_iter().map(|x| x.to_vec()).collect::<Vec<_>>().into());
     table.insert("i_ext".to_owned(), toml::Value::String(i_ext_py_qualified_name.to_owned()));
 
     toml::Value::Table(table)
@@ -416,9 +405,9 @@ where
       r: p.phi_r * (r_oo - r) / tau_r,
       ca: p.eps * ((-i_ca - i_t) - p.k_ca * ca),
       s: p.alpha * h_syn_oo * (1. - s) - p.beta * s,
+      ca_g_s: -ca_g_s / p.tau_ca + p.ca_pre * &d_gpe.iax(1) + p.ca_post * &d_stn.iax(0),
       w_g_s: Array2::<f64>::zeros(w_g_s.raw_dim()),
       w_ctx: Array2::<f64>::zeros(w_ctx.raw_dim()),
-      ca_g_s: -ca_g_s / p.tau_ca + p.ca_pre * &d_gpe.iax(1) + p.ca_post * &d_stn.iax(0),
     };
 
     (dy, i_g_s)

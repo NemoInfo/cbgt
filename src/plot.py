@@ -18,8 +18,8 @@ def plot_time_activity(dfs, labels, title=None, cmap="gray_r", file=None, y="v",
 
   im: Any = None
   for ax, x, label in zip(axs, xs, labels):
-    vmax = max(_vmax, x.T[:].max())
-    vmin = min(_vmin, x.T[:].min())
+    # vmax = max(_vmax, x.T[:].max())
+    # vmin = min(_vmin, x.T[:].min())
     im = ax.imshow(x.T[:], aspect='auto', cmap=cmap, interpolation='nearest', vmin=vmin, vmax=vmax)
     ax.set_yticks([0, x.shape[1] - 1])
     ax.set_yticklabels([1, x.shape[1]])
@@ -47,8 +47,8 @@ def plot_time_activity(dfs, labels, title=None, cmap="gray_r", file=None, y="v",
 
 def plot_time_trace(dfs, labels, title=None, file=None, color="k", y="v"):
   dt = dfs[0]["time"][1]
-  xs = [np.stack(df[y]) for df in dfs]
-  max_num_neurons = max([x.shape[1] for x in xs])
+  xs = [np.stack(df[y]) for df in dfs if y in df]
+  max_num_neurons = 10
   fig, axs = plt.subplots(max_num_neurons,
                           len(xs),
                           figsize=(4.5 * len(xs), max_num_neurons * 0.6),
@@ -57,7 +57,7 @@ def plot_time_trace(dfs, labels, title=None, file=None, color="k", y="v"):
                           gridspec_kw={'hspace': 0})
 
   for axcol, x, label in zip(axs.T, xs, labels):
-    for i, (trace, ax) in enumerate(zip(x.T, axcol)):
+    for i, (trace, ax) in enumerate(zip(x.T[:max_num_neurons], axcol)):
       ax.plot(trace, color=color, lw=1)
       ax.set_yticks([])
       ax.set_ylabel(f"{label} {i+1}", rotation=0, labelpad=10)

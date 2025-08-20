@@ -9,8 +9,8 @@ use std::{
   sync::atomic::{AtomicUsize, Ordering},
 };
 
-use crate::gpi::GPiPopulationBoundryConditions;
 use crate::stn::STNPopulationBoundryConditions;
+use crate::{ctx::CTXPopulationBoundryConditions, gpi::GPiPopulationBoundryConditions};
 use crate::{gpe::GPePopulationBoundryConditions, str::STRPopulationBoundryConditions};
 
 use crate::parameters::*;
@@ -345,11 +345,13 @@ pub fn write_boundary_file(
   gpe: &GPePopulationBoundryConditions,
   gpi: &GPiPopulationBoundryConditions,
   str: &STRPopulationBoundryConditions,
+  ctx: &CTXPopulationBoundryConditions,
   dir: &str,
   stn_qual_names: &Vec<String>,
   gpe_qual_names: &Vec<String>,
   gpi_qual_names: &Vec<String>,
   str_qual_names: &Vec<String>,
+  ctx_qual_names: &Vec<String>,
 ) {
   let stn_qual_names = stn_qual_names
     .iter()
@@ -364,6 +366,14 @@ pub fn write_boundary_file(
     .map(|x| format!("{dir}/{PYF_FILE_NAME}.{}", x.rsplit_once(".").unwrap().1))
     .collect::<Vec<_>>();
   let [str_i_ext_qual_name] = str_qual_names.as_slice() else {
+    panic!("Did not get expected number of qualified python functions");
+  };
+
+  let ctx_qual_names = ctx_qual_names
+    .iter()
+    .map(|x| format!("{dir}/{PYF_FILE_NAME}.{}", x.rsplit_once(".").unwrap().1))
+    .collect::<Vec<_>>();
+  let [ctx_i_ext_qual_name] = ctx_qual_names.as_slice() else {
     panic!("Did not get expected number of qualified python functions");
   };
 
@@ -388,6 +398,7 @@ pub fn write_boundary_file(
     ("STR".to_owned(), str.to_toml(&str_i_ext_qual_name)),
     ("GPe".to_owned(), gpe.to_toml(&gpe_i_ext_qual_name, &gpe_i_app_qual_name)),
     ("GPi".to_owned(), gpi.to_toml(&gpi_i_ext_qual_name, &gpi_i_app_qual_name)),
+    ("CTX".to_owned(), ctx.to_toml(&ctx_i_ext_qual_name)),
   ]);
 
   let file_path: std::path::PathBuf = format!("{dir}/{}", Boundary::EXP_FILE).into();

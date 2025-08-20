@@ -28,6 +28,15 @@ pub struct CTXPopulationBoundryConditions {
   pub stimuli: Array2<f64>,
 }
 
+impl CTXPopulationBoundryConditions {
+  pub fn to_toml(&self, stim_py_qualified_name: &str) -> toml::Value {
+    let mut table = toml::value::Table::new();
+    table.insert("count".to_owned(), (self.count as i64).into());
+    table.insert("stim".to_owned(), toml::Value::String(stim_py_qualified_name.to_owned()));
+    toml::Value::Table(table)
+  }
+}
+
 pub type BuilderCTXBoundary = Builder<CTX, Boundary, CTXPopulationBoundryConditions>;
 
 impl Builder<CTX, Boundary, CTXPopulationBoundryConditions> {

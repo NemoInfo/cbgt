@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -89,13 +88,8 @@ impl Network {
     let s_str_ref = unsafe { ndarray::ArrayView1::from_shape_ptr(s_str_shared.len(), s_str_shared.as_ptr()) };
     let mut s_str_mut =
       unsafe { ndarray::ArrayViewMut1::from_shape_ptr(s_str_shared.len(), s_str_shared.as_mut_ptr()) };
-    let mut s_ctx_shared = ctx.row(0).to_owned();
-    let s_ctx_ref = unsafe { ndarray::ArrayView1::from_shape_ptr(s_ctx_shared.len(), s_ctx_shared.as_ptr()) };
-    let mut s_ctx_mut =
-      unsafe { ndarray::ArrayViewMut1::from_shape_ptr(s_ctx_shared.len(), s_ctx_shared.as_mut_ptr()) };
+    let s_ctx_ref = unsafe { ndarray::ArrayView2::from_shape_ptr(ctx.raw_dim(), ctx.as_ptr()) };
 
-    let str_a_str: Vec<(usize, usize)> =
-      str.w_str.indexed_iter().filter_map(|((i, j), &v)| if v != 0. { Some((i, j)) } else { None }).collect();
 
     let spin_barrier = Arc::new(SpinBarrier::new(4));
     let stn_barrier = spin_barrier.clone();
@@ -116,11 +110,11 @@ impl Network {
           if it % 100 == 0 {
             pb.set_position(it as u64);
           }
+          let s_ctx_ref = s_ctx_ref.row(it.saturating_add((1. / dt) as usize));
           let edge_it = it * 2;
           let yp = &stn.row(it);
           stn_barrier.sym_sync_call(|| {
             s_stn_mut.assign(&yp.s);
-            s_ctx_mut.assign(&ctx.row(edge_it));
             dd_stn.update(&yp.v, dt, it);
           });
           d_gpi_mut.row_mut(it).assign(&stn.ca_g_s.row(0));
@@ -143,11 +137,10 @@ impl Network {
       });
 
       let str_thread = s.spawn(move |_| {
-        let str_a_str = Rc::new(str_a_str);
-
         for it in 0..num_timesteps - 1 {
           let edge_it = it * 2;
-          let yp = &str.row(it, str_a_str.clone());
+          let s_ctx_ref = s_ctx_ref.row(it.saturating_add((10.5 / dt) as usize));
+          let yp = &str.row(it);
           str_barrier.sym_sync_call(|| {
             s_str_mut.assign(&yp.s);
             dd_str.update(&yp.v, dt, it);
@@ -156,7 +149,7 @@ impl Network {
           let k1 = yp.dydt(&str_p, &s_ctx_ref, &str.i_ext.row(edge_it));
           let k2 = (yp + &(dt / 2. * &k1)).dydt(&str_p, &s_ctx_ref, &str.i_ext.row(edge_it + 1));
           let k3 = (yp + &(dt / 2. * &k2)).dydt(&str_p, &s_ctx_ref, &str.i_ext.row(edge_it + 1));
-          let k4 = (yp + &(dt * &k3)).dydt(&str_p,&s_ctx_ref, &str.i_ext.row(edge_it + 2));
+          let k4 = (yp + &(dt * &k3)).dydt(&str_p, &s_ctx_ref, &str.i_ext.row(edge_it + 2));
           let yn = yp + dt / 6. * (k1 + 2. * k2 + 2. * k3 + k4);
           str.insert(it + 1, &yn);
         }
@@ -402,11 +395,13 @@ impl Network {
         &gpe_bcs,
         &gpi_bcs,
         &str_bcs,
+        &ctx_bcs,
         save_dir,
         &stn_qual_names,
         &gpe_qual_names,
         &gpi_qual_names,
-        &str_qual_names, // Write other nuclei
+        &str_qual_names,
+        &ctx_qual_names,
       );
       std::fs::copy(&pyf_file, format!("{save_dir}/{PYF_FILE_NAME}.py")).unwrap();
     }
