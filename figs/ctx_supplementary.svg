@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="56.692913pt" height="56.692913pt" viewBox="0 0 56.692913 56.692913" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:date>1980-01-01T00:00:00+00:00</dc:date>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>Matplotlib v3.10.1, https://matplotlib.org/</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 56.692913 
+L 56.692913 56.692913 
+L 56.692913 0 
+L 0 0 
+z
+" style="fill: #ffffff"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 7.086614 50.456693 
+L 51.023622 50.456693 
+L 51.023622 6.80315 
+L 7.086614 6.80315 
+z
+" style="fill: #ffffff"/>
+   </g>
+   <g id="matplotlib.axis_1">
+    <g id="text_1">
+     <!-- $t$ -->
+     <g transform="translate(46.223622 62.832318) scale(0.12 -0.12)">
+      <defs>
+       <path id="DejaVuSans-Oblique-74" d="M 2706 3500 
+L 2619 3053 
+L 1472 3053 
+L 1100 1153 
+Q 1081 1047 1072 975 
+Q 1063 903 1063 863 
+Q 1063 663 1183 572 
+Q 1303 481 1569 481 
+L 2150 481 
+L 2053 0 
+L 1503 0 
+Q 991 0 739 200 
+Q 488 400 488 806 
+Q 488 878 497 964 
+Q 506 1050 525 1153 
+L 897 3053 
+L 409 3053 
+L 500 3500 
+L 978 3500 
+L 1172 4494 
+L 1747 4494 
+L 1556 3500 
+L 2706 3500 
+z
+" transform="scale(0.015625)"/>
+      </defs>
+      <use xlink:href="#DejaVuSans-Oblique-74" transform="translate(0 0.78125)"/>
+     </g>
+    </g>
+   </g>
+   <g id="matplotlib.axis_2">
+    <g id="text_2">
+     <!-- $\ast_t$ -->
+     <g transform="translate(-9.813386 25.821171) scale(0.12 -0.12)">
+      <defs>
+       <path id="DejaVuSans-2217" d="M 2153 2006 
+L 816 2778 
+L 1081 3238 
+L 2419 2466 
+L 2419 4013 
+L 2944 4013 
+L 2944 2466 
+L 4281 3238 
+L 4547 2778 
+L 3209 2006 
+L 4547 1234 
+L 4281 775 
+L 2944 1547 
+L 2944 0 
+L 2419 0 
+L 2419 1547 
+L 1081 775 
+L 816 1234 
+L 2153 2006 
+z
+" transform="scale(0.015625)"/>
+      </defs>
+      <use xlink:href="#DejaVuSans-2217" transform="translate(0 0.296875)"/>
+      <use xlink:href="#DejaVuSans-Oblique-74" transform="translate(84.746094 -16.109375) scale(0.7)"/>
+     </g>
+    </g>
+   </g>
+   <g id="line2d_1">
+    <path d="M 9.083751 44.489143 
+L 11.090923 27.296047 
+L 12.295227 18.863225 
+L 13.098096 14.486217 
+L 13.900965 11.253646 
+L 14.503117 9.611089 
+L 15.105269 8.633785 
+L 15.506703 8.339418 
+L 15.908138 8.316777 
+L 16.309572 8.550284 
+L 16.711007 9.021695 
+L 17.313158 10.129707 
+L 18.116028 12.236261 
+L 19.119614 15.611598 
+L 21.126786 23.470738 
+L 22.933242 30.229313 
+L 24.137545 34.023365 
+L 25.341849 37.102835 
+L 26.345435 39.123639 
+L 27.349021 40.692034 
+L 28.352608 41.870282 
+L 29.356194 42.728295 
+L 30.560498 43.431285 
+L 31.764801 43.876014 
+L 33.370539 44.208778 
+L 35.578429 44.402817 
+L 39.592774 44.481624 
+L 49.026485 44.489137 
+L 49.026485 44.489137 
+" clip-path="url(#pe7d8aeeb4c)" style="fill: none; stroke: #000000; stroke-width: 1.5; stroke-linecap: square"/>
+   </g>
+   <g id="patch_3">
+    <path d="M 49.344743 50.456693 
+Q 30.053096 50.456693 9.084399 50.456693 
+" style="fill: none; stroke: #000000; stroke-width: 1.5; stroke-linecap: round"/>
+    <path d="M 43.744743 47.656693 
+L 49.344743 50.456693 
+L 43.744743 53.256693 
+" style="fill: none; stroke: #000000; stroke-width: 1.5; stroke-linecap: round"/>
+   </g>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="pe7d8aeeb4c">
+   <rect x="7.086614" y="6.80315" width="43.937008" height="43.653543"/>
+  </clipPath>
+ </defs>
+</svg>

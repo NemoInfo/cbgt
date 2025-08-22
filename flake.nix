@@ -31,7 +31,7 @@
 
         shellHook = ''
           source venv/bin/activate
-          THEME="af-magic" exec $SHELL
+          exec $SHELL
         '';
       };
     };

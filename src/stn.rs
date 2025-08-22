@@ -32,7 +32,7 @@ pub struct STNPopulationBoundryConditions {
   pub i_ext: Array2<f64>,
 
   // Connection Matrice
-  pub w_g_s: Array2<f64>,
+  pub w_gpe: Array2<f64>,
   pub w_ctx: Array2<f64>,
 }
 
@@ -81,12 +81,12 @@ impl Builder<STN, Boundary, STNPopulationBoundryConditions> {
     assert_eq!(i_ext.shape()[1], stn_count);
     debug!("STN I_ext vectorized to\n{i_ext}");
 
-    let w_g_s = self
+    let w_gpe = self
       .map
-      .get("w_g_s")
+      .get("w_gpe")
       .map(try_toml_value_to_2darray::<f64>)
-      .map_or(Array2::zeros((gpe_count, stn_count)), |x| x.expect("invalid bc for w_g_s"));
-    assert_eq!(w_g_s.shape(), &[gpe_count, stn_count]);
+      .map_or(Array2::zeros((gpe_count, stn_count)), |x| x.expect("invalid bc for w_gpe"));
+    assert_eq!(w_gpe.shape(), &[gpe_count, stn_count]);
 
     let w_ctx = self
       .map
@@ -95,13 +95,13 @@ impl Builder<STN, Boundary, STNPopulationBoundryConditions> {
       .map_or(Array2::zeros((ctx_count, stn_count)), |x| x.expect("invalid bc for w_ctx"));
     assert_eq!(w_ctx.shape(), &[ctx_count, stn_count]);
 
-    STNPopulationBoundryConditions { count: stn_count, v, n, h, r, ca, s, w_g_s, w_ctx, i_ext }
+    STNPopulationBoundryConditions { count: stn_count, v, n, h, r, ca, s, w_gpe, w_ctx, i_ext }
   }
 }
 
 impl STNPopulationBoundryConditions {
   pub fn to_toml(&self, i_ext_py_qualified_name: &str) -> toml::Value {
-    let Self { count, v, h, n, r, ca, w_g_s, w_ctx, s, .. } = self;
+    let Self { count, v, h, n, r, ca, w_gpe, w_ctx, s, .. } = self;
     let mut table = toml::value::Table::new();
     table.insert("count".to_owned(), (*count as i64).into());
     table.insert("v".to_owned(), v.to_vec().into());
@@ -110,7 +110,7 @@ impl STNPopulationBoundryConditions {
     table.insert("r".to_owned(), r.to_vec().into());
     table.insert("ca".to_owned(), ca.to_vec().into());
     table.insert("s".to_owned(), s.to_vec().into());
-    table.insert("w_g_s".to_owned(), w_g_s.rows().into_iter().map(|x| x.to_vec()).collect::<Vec<_>>().into());
+    table.insert("w_gpe".to_owned(), w_gpe.rows().into_iter().map(|x| x.to_vec()).collect::<Vec<_>>().into());
     table.insert("w_ctx".to_owned(), w_ctx.rows().into_iter().map(|x| x.to_vec()).collect::<Vec<_>>().into());
     table.insert("i_ext".to_owned(), toml::Value::String(i_ext_py_qualified_name.to_owned()));
 
@@ -131,11 +131,11 @@ pub struct STNHistory {
   pub r: Array2<f64>,
   pub ca: Array2<f64>,
   pub s: Array2<f64>,
-  pub w_g_s: Array2<f64>,
+  pub w_gpe: Array2<f64>,
   pub ca_g_s: Array2<f64>,
   pub w_ctx: Array2<f64>,
   pub i_ext: Array2<f64>,
-  pub i_g_s: Array2<f64>,
+  pub i_gpe: Array2<f64>,
 }
 
 // How about: the structure of my noise, not really because i want to enforce a min_isi is
@@ -162,11 +162,11 @@ impl STNHistory {
       r: Array2::zeros((num_timesteps, stn_count)),
       ca: Array2::zeros((num_timesteps, stn_count)),
       s: Array2::zeros((num_timesteps, stn_count)),
-      w_g_s: Array2::zeros((gpe_count, stn_count)),
+      w_gpe: Array2::zeros((gpe_count, stn_count)),
       ca_g_s: Array2::zeros((gpe_count, stn_count)),
       w_ctx: Array2::zeros((ctx_count, stn_count)),
       i_ext: Array2::zeros((num_timesteps * edge_resolution, stn_count)),
-      i_g_s: Array2::zeros((num_timesteps, stn_count)),
+      i_gpe: Array2::zeros((num_timesteps, stn_count)),
     }
   }
 
@@ -176,7 +176,7 @@ impl STNHistory {
     roll_time_series(self.r.view_mut());
     roll_time_series(self.ca.view_mut());
     roll_time_series(self.s.view_mut());
-    roll_time_series(self.i_g_s.view_mut());
+    roll_time_series(self.i_gpe.view_mut());
   }
 
   pub fn size(&self) -> usize {
@@ -187,10 +187,10 @@ impl STNHistory {
         + self.r.len()
         + self.ca.len()
         + self.s.len()
-        + self.w_g_s.len()
+        + self.w_gpe.len()
         + self.ca_g_s.len()
         + self.i_ext.len()
-        + self.i_g_s.len())
+        + self.i_gpe.len())
   }
 
   pub fn with_bcs(mut self, bc: STNPopulationBoundryConditions) -> Self {
@@ -200,23 +200,23 @@ impl STNHistory {
     self.r.row_mut(0).assign(&bc.r);
     self.ca.row_mut(0).assign(&bc.ca);
     self.s.row_mut(0).assign(&bc.s);
-    self.w_g_s.assign(&bc.w_g_s);
+    self.w_gpe.assign(&bc.w_gpe);
     self.w_ctx.assign(&bc.w_ctx);
     self.i_ext.assign(&bc.i_ext);
     self
   }
 
-  pub fn insert(&mut self, it: usize, y: &STNState<OwnedRepr<f64>>, i_g_s: ArrayView1<f64>) {
+  pub fn insert(&mut self, it: usize, y: &STNState<OwnedRepr<f64>>, i_gpe: ArrayView1<f64>) {
     self.v.row_mut(it).assign(&y.v);
     self.n.row_mut(it).assign(&y.n);
     self.r.row_mut(it).assign(&y.r);
     self.h.row_mut(it).assign(&y.h);
     self.ca.row_mut(it).assign(&y.ca);
     self.s.row_mut(it).assign(&y.s);
-    self.i_g_s.row_mut(it).assign(&i_g_s);
-    self.w_g_s = y.w_g_s.clone();
+    self.i_gpe.row_mut(it).assign(&i_gpe);
+    self.w_gpe = y.w_gpe.clone();
     self.w_ctx = y.w_ctx.clone();
-    self.ca_g_s = y.ca_g_s.clone();
+    self.ca_g_s = y.ca_gpe.clone();
   }
 
   pub fn row<'a>(&'a self, it: usize) -> STNState<ViewRepr<&'a f64>> {
@@ -227,8 +227,8 @@ impl STNHistory {
       r: self.r.row(it),
       ca: self.ca.row(it),
       s: self.s.row(it),
-      w_g_s: self.w_g_s.view(),
-      ca_g_s: self.ca_g_s.view(),
+      w_gpe: self.w_gpe.view(),
+      ca_gpe: self.ca_g_s.view(),
       w_ctx: self.w_ctx.view(),
     }
   }
@@ -247,8 +247,8 @@ where
       r: self * &rhs.r,
       ca: self * &rhs.ca,
       s: self * &rhs.s,
-      w_g_s: self * &rhs.w_g_s,
-      ca_g_s: self * &rhs.ca_g_s,
+      w_gpe: self * &rhs.w_gpe,
+      ca_gpe: self * &rhs.ca_gpe,
       w_ctx: self * &rhs.w_ctx,
     }
   }
@@ -294,8 +294,8 @@ where
   pub r: ArrayBase<T, Ix1>,
   pub ca: ArrayBase<T, Ix1>,
   pub s: ArrayBase<T, Ix1>,
-  pub w_g_s: ArrayBase<T, Ix2>,
-  pub ca_g_s: ArrayBase<T, Ix2>,
+  pub w_gpe: ArrayBase<T, Ix2>,
+  pub ca_gpe: ArrayBase<T, Ix2>,
   pub w_ctx: ArrayBase<T, Ix2>,
 }
 
@@ -341,7 +341,7 @@ where
       .field("r", &self.r)
       .field("ca", &self.ca)
       .field("s", &self.s)
-      .field("w_g_s", &self.w_g_s)
+      .field("w_gpe", &self.w_gpe)
       .finish()
   }
 }
@@ -359,14 +359,14 @@ where
     s_ctx: &ArrayView1<f64>,
     i_ext: &ArrayView1<f64>,
   ) -> (STNState<OwnedRepr<T::Elem>>, Array1<f64>) {
-    let Self { v, n, h, r, ca, s, w_g_s, ca_g_s, w_ctx } = self;
+    let Self { v, n, h, r, ca, s, w_gpe, ca_gpe: ca_g_s, w_ctx } = self;
     let eta_d: f64 = 0.01; // @TODO -> Factor this into parameters struct
     let eta_p: f64 = 0.0075;
     let f_d: f64 = 0.42;
     let f_p: f64 = 2.25;
 
-    let etas = [0., eta_d, eta_p];
-    let fs = [0., f_d, f_p];
+    let _etas = [0., eta_d, eta_p];
+    let _fs = [0., f_d, f_p];
 
     let n_oo = x_oo(v, p.tht_n, p.sig_n);
     let m_oo = x_oo(v, p.tht_m, p.sig_m);
@@ -387,30 +387,30 @@ where
     let i_t = p.g_t * a_oo.powi(3) * b_oo.pow2() * (v - p.v_ca);
     let i_ca = p.g_ca * s_oo.powi(2) * (v - p.v_ca);
     let i_ahp = p.g_ahp * (v - p.v_k) * ca / (ca + p.k_1);
-    let i_g_s = p.g_g_s * (v - p.v_g_s) * (self.w_g_s.t().dot(s_gpe));
+    let i_gpe = p.g_g_s * (v - p.v_g_s) * (self.w_gpe.t().dot(s_gpe));
     let i_ctx = p.g_ctx * (v - p.v_ctx) * (w_ctx.t().dot(s_ctx));
 
-    //   let mut dw_g_s = Array2::<f64>::zeros(w_g_s.raw_dim());
+    //   let mut dw_gpe = Array2::<f64>::zeros(w_gpe.raw_dim());
     //   let mut _ca_g_s = Array2::<f64>::zeros(ca_g_s.raw_dim());
     //   for &(i, j) in a_g_s.iter() {
     //     _ca_g_s[[i, j]] = -ca_g_s[[i, j]] / p.tau_ca + p.ca_pre * d_gpe[i] + p.ca_post * d_stn[j];
     //     let k = (ca_g_s[[i, j]] > p.theta_d) as usize + (ca_g_s[[i, j]] > p.theta_p) as usize;
-    //     dw_g_s[[i, j]] = etas[k] * (fs[k] - w_g_s[[i, j]]);
+    //     dw_gpe[[i, j]] = etas[k] * (fs[k] - w_gpe[[i, j]]);
     //   }
 
     let dy = STNState {
-      v: -i_l - i_k - i_na - &i_t - &i_ca - i_ahp - &i_g_s - &i_ctx - i_ext,
+      v: -i_l - i_k - i_na - &i_t - &i_ca - i_ahp - &i_gpe - &i_ctx - i_ext,
       n: p.phi_n * (n_oo - n) / tau_n,
       h: p.phi_h * (h_oo - h) / tau_h,
       r: p.phi_r * (r_oo - r) / tau_r,
       ca: p.eps * ((-i_ca - i_t) - p.k_ca * ca),
       s: p.alpha * h_syn_oo * (1. - s) - p.beta * s,
-      ca_g_s: -ca_g_s / p.tau_ca + p.ca_pre * &d_gpe.iax(1) + p.ca_post * &d_stn.iax(0),
-      w_g_s: Array2::<f64>::zeros(w_g_s.raw_dim()),
+      ca_gpe: -ca_g_s / p.tau_ca + p.ca_pre * &d_gpe.iax(1) + p.ca_post * &d_stn.iax(0),
+      w_gpe: Array2::<f64>::zeros(w_gpe.raw_dim()),
       w_ctx: Array2::<f64>::zeros(w_ctx.raw_dim()),
     };
 
-    (dy, i_g_s)
+    (dy, i_gpe)
   }
 }
 
@@ -428,8 +428,8 @@ where
       r: &self.r + &rhs.r,
       ca: &self.ca + &rhs.ca,
       s: &self.s + &rhs.s,
-      w_g_s: &self.w_g_s + &rhs.w_g_s,
-      ca_g_s: &self.w_g_s + &rhs.w_g_s,
+      w_gpe: &self.w_gpe + &rhs.w_gpe,
+      ca_gpe: &self.w_gpe + &rhs.w_gpe,
       w_ctx: &self.w_ctx + &rhs.w_ctx,
     }
   }
@@ -522,8 +522,8 @@ impl STNHistory {
       array2_to_polars_column("ca", self.ca.slice(srange)),
       array2_to_polars_column("s", self.s.slice(srange)),
       array2_to_polars_column("i_ext", self.i_ext.slice(erange)),
-      array2_to_polars_column("i_g_s", self.i_g_s.slice(srange)),
-      unit_to_polars_column("w_g_s", self.w_g_s.view(), num_timesteps),
+      array2_to_polars_column("i_g_s", self.i_gpe.slice(srange)),
+      unit_to_polars_column("w_gpe", self.w_gpe.view(), num_timesteps),
     ])
     .expect("This shouldn't happend if the struct is valid")
   }

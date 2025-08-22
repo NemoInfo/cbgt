@@ -33,15 +33,15 @@ pub struct Network {
   pub dt: f64,
   #[pyo3(get)]
   pub total_t: f64,
-  pub str_states: STRHistory,
-  pub str_parameters: STRParameters,
-  pub stn_states: STNHistory,
-  pub stn_parameters: STNParameters,
-  pub gpe_states: GPeHistory,
-  pub gpe_parameters: GPeParameters,
-  pub gpi_states: GPiHistory,
-  pub gpi_parameters: GPiParameters,
-  pub ctx_syn: Array2<f64>,
+  pub str: STRHistory,
+  pub str_p: STRParameters,
+  pub stn: STNHistory,
+  pub stn_p: STNParameters,
+  pub gpe: GPeHistory,
+  pub gpe_p: GPeParameters,
+  pub gpi: GPiHistory,
+  pub gpi_p: GPiParameters,
+  pub ctx: Array2<f64>,
 }
 
 impl Network {
@@ -50,17 +50,17 @@ impl Network {
 
     debug!("Computing {} timesteps", format_number(num_timesteps));
 
-    let stn_p = self.stn_parameters.clone();
-    let gpe_p = self.gpe_parameters.clone();
-    let gpi_p = self.gpi_parameters.clone();
-    let str_p = self.str_parameters.clone();
+    let stn_p = self.stn_p.clone();
+    let gpe_p = self.gpe_p.clone();
+    let gpi_p = self.gpi_p.clone();
+    let str_p = self.str_p.clone();
     let dt = self.dt;
 
-    let stn = &mut self.stn_states;
-    let gpe = &mut self.gpe_states;
-    let gpi = &mut self.gpi_states;
-    let str = &mut self.str_states;
-    let ctx = &self.ctx_syn;
+    let stn = &mut self.stn;
+    let gpe = &mut self.gpe;
+    let gpi = &mut self.gpi;
+    let str = &mut self.str;
+    let ctx = &self.ctx;
 
     let mut dd_stn = DiracDeltaState::new(stn.v.raw_dim());
     let d_stn_ref = unsafe { ndarray::ArrayView2::from_shape_ptr(dd_stn.d.raw_dim(), dd_stn.d.as_ptr()) };
@@ -72,24 +72,12 @@ impl Network {
     let mut dd_str = DiracDeltaState::new(str.v.raw_dim());
     let d_str_ref = unsafe { ndarray::ArrayView2::from_shape_ptr(dd_str.d.raw_dim(), dd_str.d.as_ptr()) };
 
-    let mut s_gpe_shared = gpe.s.row(0).to_owned();
-    let s_gpe_ref = unsafe { ndarray::ArrayView1::from_shape_ptr(s_gpe_shared.len(), s_gpe_shared.as_ptr()) };
-    let mut s_gpe_mut =
-      unsafe { ndarray::ArrayViewMut1::from_shape_ptr(s_gpe_shared.len(), s_gpe_shared.as_mut_ptr()) };
-    let mut s_gpi_shared = gpi.s.row(0).to_owned();
-    let _s_gpi_ref = unsafe { ndarray::ArrayView1::from_shape_ptr(s_gpi_shared.len(), s_gpi_shared.as_ptr()) };
-    let mut s_gpi_mut =
-      unsafe { ndarray::ArrayViewMut1::from_shape_ptr(s_gpi_shared.len(), s_gpi_shared.as_mut_ptr()) };
-    let mut s_stn_shared = stn.s.row(0).to_owned();
-    let s_stn_ref = unsafe { ndarray::ArrayView1::from_shape_ptr(s_stn_shared.len(), s_stn_shared.as_ptr()) };
-    let mut s_stn_mut =
-      unsafe { ndarray::ArrayViewMut1::from_shape_ptr(s_stn_shared.len(), s_stn_shared.as_mut_ptr()) };
-    let mut s_str_shared = str.s.row(0).to_owned();
-    let s_str_ref = unsafe { ndarray::ArrayView1::from_shape_ptr(s_str_shared.len(), s_str_shared.as_ptr()) };
-    let mut s_str_mut =
-      unsafe { ndarray::ArrayViewMut1::from_shape_ptr(s_str_shared.len(), s_str_shared.as_mut_ptr()) };
     let s_ctx_ref = unsafe { ndarray::ArrayView2::from_shape_ptr(ctx.raw_dim(), ctx.as_ptr()) };
 
+    let stn_s = unsafe { ndarray::ArrayView2::from_shape_ptr(stn.s.raw_dim(), stn.s.as_ptr()) };
+    let str_s = unsafe { ndarray::ArrayView2::from_shape_ptr(str.s.raw_dim(), str.s.as_ptr()) };
+    let gpe_s = unsafe { ndarray::ArrayView2::from_shape_ptr(gpe.s.raw_dim(), gpe.s.as_ptr()) };
+    let _gpi_s = unsafe { ndarray::ArrayView2::from_shape_ptr(gpi.s.raw_dim(), gpi.s.as_ptr()) };
 
     let spin_barrier = Arc::new(SpinBarrier::new(4));
     let stn_barrier = spin_barrier.clone();
@@ -113,24 +101,22 @@ impl Network {
           let s_ctx_ref = s_ctx_ref.row(it.saturating_add((1. / dt) as usize));
           let edge_it = it * 2;
           let yp = &stn.row(it);
-          stn_barrier.sym_sync_call(|| {
-            s_stn_mut.assign(&yp.s);
-            dd_stn.update(&yp.v, dt, it);
-          });
+          stn_barrier.sym_sync_call(|| dd_stn.update(&yp.v, dt, it));
           d_gpi_mut.row_mut(it).assign(&stn.ca_g_s.row(0));
 
           let d_stn = d_stn_ref.row(it);
           let d_gpe = d_gpe_ref.row(it);
+          let gpe_s = gpe_s.row(it);
 
-          let (k1, i_g_s) = yp.dydt(&stn_p, &d_stn, &d_gpe, &s_gpe_ref, &s_ctx_ref, &stn.i_ext.row(edge_it));
+          let (k1, i_gpe) = yp.dydt(&stn_p, &d_stn, &d_gpe, &gpe_s, &s_ctx_ref, &stn.i_ext.row(edge_it));
           let (k2, _) =
-            (yp + &(dt / 2. * &k1)).dydt(&stn_p, &d_stn, &d_gpe, &s_gpe_ref, &s_ctx_ref, &stn.i_ext.row(edge_it + 1));
+            (yp + &(dt / 2. * &k1)).dydt(&stn_p, &d_stn, &d_gpe, &gpe_s, &s_ctx_ref, &stn.i_ext.row(edge_it + 1));
           let (k3, _) =
-            (yp + &(dt / 2. * &k2)).dydt(&stn_p, &d_stn, &d_gpe, &s_gpe_ref, &s_ctx_ref, &stn.i_ext.row(edge_it + 1));
+            (yp + &(dt / 2. * &k2)).dydt(&stn_p, &d_stn, &d_gpe, &gpe_s, &s_ctx_ref, &stn.i_ext.row(edge_it + 1));
           let (k4, _) =
-            (yp + &(dt * &k3)).dydt(&stn_p, &d_stn, &d_gpe, &s_gpe_ref, &s_ctx_ref, &stn.i_ext.row(edge_it + 2));
+            (yp + &(dt * &k3)).dydt(&stn_p, &d_stn, &d_gpe, &gpe_s, &s_ctx_ref, &stn.i_ext.row(edge_it + 2));
           let yn = yp + dt / 6. * (k1 + 2. * k2 + 2. * k3 + k4);
-          stn.insert(it + 1, &yn, i_g_s.view());
+          stn.insert(it + 1, &yn, i_gpe.view());
         }
         pb.finish_and_clear();
         dd_stn
@@ -141,10 +127,7 @@ impl Network {
           let edge_it = it * 2;
           let s_ctx_ref = s_ctx_ref.row(it.saturating_add((10.5 / dt) as usize));
           let yp = &str.row(it);
-          str_barrier.sym_sync_call(|| {
-            s_str_mut.assign(&yp.s);
-            dd_str.update(&yp.v, dt, it);
-          });
+          str_barrier.sym_sync_call(|| dd_str.update(&yp.v, dt, it));
 
           let k1 = yp.dydt(&str_p, &s_ctx_ref, &str.i_ext.row(edge_it));
           let k2 = (yp + &(dt / 2. * &k1)).dydt(&str_p, &s_ctx_ref, &str.i_ext.row(edge_it + 1));
@@ -161,31 +144,24 @@ impl Network {
           let edge_it = it * 2;
           let yp = &gpe.row(it);
           gpe_barrier.sym_sync_call(|| {
-            s_gpe_mut.assign(&yp.s);
             dd_gpe.update(&yp.v, dt, it);
           });
 
           let d_stn = d_stn_ref.row(it);
           let d_gpe = d_gpe_ref.row(it);
           let d_str = d_str_ref.row(it);
+          let stn_s = stn_s.row(it);
+          let str_s = str_s.row(it);
 
-          let k1 = yp.dydt(
-            &gpe_p,
-            &d_gpe,
-            &d_stn,
-            &d_str,
-            &s_stn_ref,
-            &s_str_ref,
-            &gpe.i_ext.row(edge_it),
-            &gpe.i_app.row(edge_it),
-          );
+          let k1 =
+            yp.dydt(&gpe_p, &d_gpe, &d_stn, &d_str, &stn_s, &str_s, &gpe.i_ext.row(edge_it), &gpe.i_app.row(edge_it));
           let k2 = (yp + &(dt / 2. * &k1)).dydt(
             &gpe_p,
             &d_gpe,
             &d_stn,
             &d_str,
-            &s_stn_ref,
-            &s_str_ref,
+            &stn_s,
+            &str_s,
             &gpe.i_ext.row(edge_it + 1),
             &gpe.i_app.row(edge_it + 1),
           );
@@ -194,8 +170,8 @@ impl Network {
             &d_gpe,
             &d_stn,
             &d_str,
-            &s_stn_ref,
-            &s_str_ref,
+            &stn_s,
+            &str_s,
             &gpe.i_ext.row(edge_it + 1),
             &gpe.i_app.row(edge_it + 1),
           );
@@ -204,8 +180,8 @@ impl Network {
             &d_gpe,
             &d_stn,
             &d_str,
-            &s_stn_ref,
-            &s_str_ref,
+            &stn_s,
+            &str_s,
             &gpe.i_ext.row(edge_it + 2),
             &gpe.i_app.row(edge_it + 2),
           );
@@ -219,32 +195,23 @@ impl Network {
         for it in 0..num_timesteps - 1 {
           let edge_it = it * 2;
           let yp = &gpi.row(it);
-          gpi_barrier.sym_sync_call(|| {
-            s_gpi_mut.assign(&yp.s);
-            dd_gpi.update(&yp.v, dt, it);
-          });
+          gpi_barrier.sym_sync_call(|| dd_gpi.update(&yp.v, dt, it));
 
           let d_gpi = d_gpi_ref.row(it);
           let d_stn = d_stn_ref.row(it);
           let d_str = d_str_ref.row(it);
+          let stn_s = stn_s.row(it);
+          let str_s = str_s.row(it);
 
-          let k1 = yp.dydt(
-            &gpi_p,
-            &d_gpi,
-            &d_stn,
-            &d_str,
-            &s_stn_ref,
-            &s_str_ref,
-            &gpi.i_ext.row(edge_it),
-            &gpi.i_app.row(edge_it),
-          );
+          let k1 =
+            yp.dydt(&gpi_p, &d_gpi, &d_stn, &d_str, &stn_s, &str_s, &gpi.i_ext.row(edge_it), &gpi.i_app.row(edge_it));
           let k2 = (yp + &(dt / 2. * &k1)).dydt(
             &gpi_p,
             &d_gpi,
             &d_stn,
             &d_str,
-            &s_stn_ref,
-            &s_str_ref,
+            &stn_s,
+            &str_s,
             &gpi.i_ext.row(edge_it + 1),
             &gpi.i_app.row(edge_it + 1),
           );
@@ -253,8 +220,8 @@ impl Network {
             &d_gpi,
             &d_stn,
             &d_str,
-            &s_stn_ref,
-            &s_str_ref,
+            &stn_s,
+            &str_s,
             &gpi.i_ext.row(edge_it + 1),
             &gpi.i_app.row(edge_it + 1),
           );
@@ -263,8 +230,8 @@ impl Network {
             &d_gpi,
             &d_stn,
             &d_str,
-            &s_stn_ref,
-            &s_str_ref,
+            &stn_s,
+            &str_s,
             &gpi.i_ext.row(edge_it + 2),
             &gpi.i_app.row(edge_it + 2),
           );
@@ -345,11 +312,11 @@ impl Network {
     let (gpi_kw_params, gpi_kw_bcs) = gpi_kw_config.into_maps(&mut pyf_src);
     let (ctx_kw_params, ctx_kw_bcs) = ctx_kw_config.into_maps(&mut pyf_src);
 
-    let str_parameters = BuilderSTRParameters::build(str_kw_params, parameters_file, experiment, use_default).finish();
-    let stn_parameters = BuilderSTNParameters::build(stn_kw_params, parameters_file, experiment, use_default).finish();
-    let gpe_parameters = BuilderGPeParameters::build(gpe_kw_params, parameters_file, experiment, use_default).finish();
-    let gpi_parameters = BuilderGPiParameters::build(gpi_kw_params, parameters_file, experiment, use_default).finish();
-    let ctx_parameters = BuilderCTXParameters::build(ctx_kw_params, parameters_file, experiment, use_default).finish();
+    let str_p = BuilderSTRParameters::build(str_kw_params, parameters_file, experiment, use_default).finish();
+    let stn_p = BuilderSTNParameters::build(stn_kw_params, parameters_file, experiment, use_default).finish();
+    let gpe_p = BuilderGPeParameters::build(gpe_kw_params, parameters_file, experiment, use_default).finish();
+    let gpi_p = BuilderGPiParameters::build(gpi_kw_params, parameters_file, experiment, use_default).finish();
+    let ctx_p = BuilderCTXParameters::build(ctx_kw_params, parameters_file, experiment, use_default).finish();
 
     log::debug!("{:?}", ctx_kw_bcs);
     let mut str_bcs_builder = BuilderSTRBoundary::build(str_kw_bcs, boundry_ic_file, experiment, use_default);
@@ -389,7 +356,7 @@ impl Network {
 
     if let Some(save_dir) = &save_dir {
       // @TODO save gpi and str as well
-      write_parameter_file(&stn_parameters, &gpe_parameters, save_dir); // TODO add other nuclei
+      write_parameter_file(&stn_p, &gpe_p, save_dir); // TODO add other nuclei
       write_boundary_file(
         &stn_bcs,
         &gpe_bcs,
@@ -406,27 +373,15 @@ impl Network {
       std::fs::copy(&pyf_file, format!("{save_dir}/{PYF_FILE_NAME}.py")).unwrap();
     }
 
-    let str_states = STRHistory::new(num_timesteps, str_count, ctx_count, 2).with_bcs(str_bcs);
-    let stn_states = STNHistory::new(num_timesteps, stn_count, gpe_count, ctx_count, 2).with_bcs(stn_bcs);
-    let gpe_states = GPeHistory::new(num_timesteps, gpe_count, stn_count, str_count, 2).with_bcs(gpe_bcs);
-    let gpi_states = GPiHistory::new(num_timesteps, gpi_count, stn_count, str_count, 2).with_bcs(gpi_bcs);
-    let ctx_syn = ctx_bcs.to_syn_ctx(&ctx_parameters, dt / 2.);
+    let str = STRHistory::new(num_timesteps, str_count, ctx_count, 2).with_bcs(str_bcs);
+    let stn = STNHistory::new(num_timesteps, stn_count, gpe_count, ctx_count, 2).with_bcs(stn_bcs);
+    let gpe = GPeHistory::new(num_timesteps, gpe_count, stn_count, str_count, 2).with_bcs(gpe_bcs);
+    let gpi = GPiHistory::new(num_timesteps, gpi_count, stn_count, str_count, 2).with_bcs(gpi_bcs);
+    let ctx = ctx_bcs.to_syn_ctx(&ctx_p, dt / 2.);
 
     std::fs::remove_file(pyf_file).expect("File was just created, it should exist.");
 
-    Self {
-      dt,
-      total_t,
-      stn_states,
-      stn_parameters,
-      gpe_states,
-      gpe_parameters,
-      gpi_states,
-      gpi_parameters,
-      str_states,
-      str_parameters,
-      ctx_syn,
-    }
+    Self { dt, total_t, stn, stn_p, gpe, gpe_p, gpi, gpi_p, str, str_p, ctx }
   }
 
   #[pyo3(name = "run_rk4")]
@@ -442,11 +397,11 @@ impl Network {
 
   #[pyo3(name="to_polars", signature = (dt=None))]
   fn into_map_polars_dataframe_py(&self, py: Python, dt: Option<f64>) -> Py<PyDict> {
-    let stn = self.stn_states.into_compressed_polars_df(self.dt, dt, 2);
-    let gpe = self.gpe_states.into_compressed_polars_df(self.dt, dt, 2);
-    let gpi = self.gpi_states.into_compressed_polars_df(self.dt, dt, 2);
-    let str = self.str_states.into_compressed_polars_df(self.dt, dt, 2);
-    let ctx = ctx_syn_into_compressed_polars_df(&self.ctx_syn, self.dt, dt, 2);
+    let stn = self.stn.into_compressed_polars_df(self.dt, dt, 2);
+    let gpe = self.gpe.into_compressed_polars_df(self.dt, dt, 2);
+    let gpi = self.gpi.into_compressed_polars_df(self.dt, dt, 2);
+    let str = self.str.into_compressed_polars_df(self.dt, dt, 2);
+    let ctx = ctx_syn_into_compressed_polars_df(&self.ctx, self.dt, dt, 2);
 
     let dict = PyDict::new(py);
     dict.set_item("stn", pyo3_polars::PyDataFrame(stn)).expect("Could not add insert STN Polars DataFrame");
@@ -471,19 +426,19 @@ impl Network {
       file_path
     };
 
-    let mut str = self.str_states.into_compressed_polars_df(self.dt, dt, 2);
+    let mut str = self.str.into_compressed_polars_df(self.dt, dt, 2);
     write_parquet("str.parquet", &mut str);
     drop(str);
-    let mut stn = self.stn_states.into_compressed_polars_df(self.dt, dt, 2);
+    let mut stn = self.stn.into_compressed_polars_df(self.dt, dt, 2);
     write_parquet("stn.parquet", &mut stn);
     drop(stn);
-    let mut gpe = self.gpe_states.into_compressed_polars_df(self.dt, dt, 2);
+    let mut gpe = self.gpe.into_compressed_polars_df(self.dt, dt, 2);
     write_parquet("gpe.parquet", &mut gpe);
     drop(gpe);
-    let mut gpi = self.gpi_states.into_compressed_polars_df(self.dt, dt, 2);
+    let mut gpi = self.gpi.into_compressed_polars_df(self.dt, dt, 2);
     write_parquet("gpi.parquet", &mut gpi);
     drop(gpi);
-    let mut ctx = ctx_syn_into_compressed_polars_df(&self.ctx_syn, self.dt, dt, 2);
+    let mut ctx = ctx_syn_into_compressed_polars_df(&self.ctx, self.dt, dt, 2);
     write_parquet("ctx.parquet", &mut ctx);
     drop(ctx);
     Ok(())
