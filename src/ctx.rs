@@ -157,11 +157,14 @@ fn rayleigh_kernel(sigma_ray: f64, dt: f64, length: usize) -> Array1<f64> {
   }))
 }
 
+
+#[rustfmt::skip]
 pub fn ctx_syn_into_compressed_polars_df(
   ctx_syn: &Array2<f64>,
   idt: f64,
   odt: Option<f64>,
   edge_resolution: usize,
+  data: &Vec<&str>,
 ) -> polars::prelude::DataFrame {
   let num_timesteps = ctx_syn.nrows() / edge_resolution;
   let odt = odt.unwrap_or(1.); // ms
@@ -179,9 +182,9 @@ pub fn ctx_syn_into_compressed_polars_df(
   let num_timesteps = (0..num_timesteps).step_by(step).len();
   let time = (Array1::range(0., num_timesteps as f64, 1.) * output_dt).to_shape((num_timesteps, 1)).unwrap().to_owned();
 
-  polars::prelude::DataFrame::new(vec![
-    array2_to_polars_column("time", time.view()),
-    array2_to_polars_column("s", ctx_syn.slice(erange)),
-  ])
-  .expect("This shouldn't happend if the struct is valid")
+  let mut out = vec![];
+  if data.contains(&"time"){out.push(array2_to_polars_column("time", time.view()))}
+  if data.contains(&"s"){out.push(array2_to_polars_column("s", ctx_syn.slice(erange)))}
+
+  polars::prelude::DataFrame::new(out).expect("This shouldn't happend if the struct is valid")
 }

@@ -138,7 +138,8 @@ def test(experiment="wave", total_t=2, metrics=None, **opt):
   start = time.time()
   rt.run_rk4()
   print(f"\n> Simulated {total_t:.2f}s in {time.time() - start:.2f}s 🚀\n")
-  df = rt.to_polars()
+  df = rt.to_polars(data=metrics + ["time"])
+  rt.save_to_parquet_files("test_out/")
 
   for y in metrics:
     if y == "i_ext":
@@ -149,9 +150,9 @@ def test(experiment="wave", total_t=2, metrics=None, **opt):
       # plot_time_trace([df for df in df.values()], [*df.keys()], y="v", color="w")
       plt.show(block=False)
     else:
-      plot_time_activity([df for df in df.values()], [*df.keys()], y=y, cmap=cmap)
+      plot_time_activity([df for df in df.values()], [*df.keys()], y=y, cmap=cmap, vmax=None, vmin=None)
       plt.show(block=False)
-      #plot_time_trace([df for df in df.values()], [*df.keys()], y=y)
+      plot_time_trace([df for df in df.values()], [*df.keys()], y=y, color="w")
       #plt.show(block=False)
 
   plt.show()

@@ -371,11 +371,13 @@ pub fn tau_x<T: ndarray::Data<Elem = f64>>(
 }
 
 impl STRHistory {
+  #[rustfmt::skip]
   pub fn into_compressed_polars_df(
     &self,
     idt: f64,
     odt: Option<f64>,
     edge_resolution: usize,
+    data: &Vec<&str>,
   ) -> polars::prelude::DataFrame {
     let num_timesteps = self.v.nrows();
     let odt = odt.unwrap_or(1.); // ms
@@ -397,15 +399,15 @@ impl STRHistory {
     let time =
       (Array1::range(0., num_timesteps as f64, 1.) * output_dt).to_shape((num_timesteps, 1)).unwrap().to_owned();
 
-    polars::prelude::DataFrame::new(vec![
-      array2_to_polars_column("time", time.view()),
-      array2_to_polars_column("v", self.v.slice(srange)),
-      array2_to_polars_column("n", self.n.slice(srange)),
-      array2_to_polars_column("h", self.h.slice(srange)),
-      array2_to_polars_column("r", self.r.slice(srange)),
-      array2_to_polars_column("s", self.s.slice(srange)),
-      array2_to_polars_column("i_ext", self.i_ext.slice(erange)),
-    ])
-    .expect("This shouldn't happend if the struct is valid")
+    let mut out = vec![];
+    if data.contains(&"time"){out.push(array2_to_polars_column("time", time.view()))}
+    if data.contains(&"v"){out.push(array2_to_polars_column("v", self.v.slice(srange)))}
+    if data.contains(&"n"){out.push(array2_to_polars_column("n", self.n.slice(srange)))}
+    if data.contains(&"h"){out.push(array2_to_polars_column("h", self.h.slice(srange)))}
+    if data.contains(&"r"){out.push(array2_to_polars_column("r", self.r.slice(srange)))}
+    if data.contains(&"s"){out.push(array2_to_polars_column("s", self.s.slice(srange)))}
+    if data.contains(&"i_ext"){out.push(array2_to_polars_column("i_ext", self.i_ext.slice(erange)))}
+
+    polars::prelude::DataFrame::new(out).expect("This shouldn't happend if the struct is valid")
   }
 }

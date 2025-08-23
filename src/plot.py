@@ -1,3 +1,4 @@
+from logging import warning
 import matplotlib.pyplot as plt
 import numpy as np
 from typing import Any
@@ -12,15 +13,16 @@ def plot_time_activity(dfs, labels, title=None, cmap="gray_r", file=None, y="v",
   dt = dfs[0]["time"][1]
 
   xs = [np.stack(df[y]) for df in dfs if y in df]
+  if len(xs) == 0:
+    warning("No key matched y")
+    return
 
   fig, axs = plt.subplots(len(xs), 1, sharex=True, figsize=(8, 10 * 0.3))
   axs = np.atleast_1d(axs)
 
   im: Any = None
   for ax, x, label in zip(axs, xs, labels):
-    # vmax = max(_vmax, x.T[:].max())
-    # vmin = min(_vmin, x.T[:].min())
-    im = ax.imshow(x.T[:], aspect='auto', cmap=cmap, interpolation='nearest', vmin=vmin, vmax=vmax)
+    im = ax.imshow(x.T[:], aspect='auto', cmap=cmap, interpolation='nearest', vmin=_vmin, vmax=_vmax)
     ax.set_yticks([0, x.shape[1] - 1])
     ax.set_yticklabels([1, x.shape[1]])
     ax.set_ylabel(f"{label} #", rotation=0, fontsize=14, labelpad=15)
@@ -32,7 +34,8 @@ def plot_time_activity(dfs, labels, title=None, cmap="gray_r", file=None, y="v",
         shrink=0.8,
         aspect=10,
     )
-    cbar.set_ticks(np.linspace(vmin, vmax, 3))
+    if vmax and vmin:
+      cbar.set_ticks(np.linspace(vmin, vmax, 3))
     cbar.ax.yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
     cbar.set_label(unit, rotation=0, fontsize=14, labelpad=15)
 
@@ -56,6 +59,8 @@ def plot_time_trace(dfs, labels, title=None, file=None, color="k", y="v"):
                           tight_layout=True,
                           gridspec_kw={'hspace': 0})
 
+  if len(xs) == 1:
+    axs = axs[:,None]
   for axcol, x, label in zip(axs.T, xs, labels):
     for i, (trace, ax) in enumerate(zip(x.T[:max_num_neurons], axcol)):
       ax.plot(trace, color=color, lw=1)

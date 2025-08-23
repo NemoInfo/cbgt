@@ -462,11 +462,13 @@ impl GPiHistory {
     }
   }
 
+  #[rustfmt::skip]
   pub fn into_compressed_polars_df(
     &self,
     idt: f64,
     odt: Option<f64>,
     edge_resolution: usize,
+    data: &Vec<&str>,
   ) -> polars::prelude::DataFrame {
     let num_timesteps = self.v.nrows();
     let odt = odt.unwrap_or(1.); // ms
@@ -490,19 +492,20 @@ impl GPiHistory {
       .unwrap()
       .to_owned();
 
-    polars::prelude::DataFrame::new(vec![
-      array2_to_polars_column("time", time.view()),
-      array2_to_polars_column("v", self.v.slice(srange)),
-      array2_to_polars_column("n", self.n.slice(srange)),
-      array2_to_polars_column("h", self.h.slice(srange)),
-      array2_to_polars_column("r", self.r.slice(srange)),
-      array2_to_polars_column("ca", self.ca.slice(srange)),
-      array2_to_polars_column("s", self.s.slice(srange)),
-      array2_to_polars_column("i_ext", self.i_ext.slice(erange)),
-      array2_to_polars_column("i_app", self.i_app.slice(erange)),
-      unit_to_polars_column("w_g_g", self.w_g_g.view(), num_timesteps),
-      unit_to_polars_column("w_s_g", self.w_s_g.view(), num_timesteps),
-    ])
+    let mut out = vec![];
+    if data.contains(&"time"){out.push(array2_to_polars_column("time", time.view()))}
+    if data.contains(&"v"){out.push(array2_to_polars_column("v", self.v.slice(srange)))}
+    if data.contains(&"n"){out.push(array2_to_polars_column("n", self.n.slice(srange)))}
+    if data.contains(&"h"){out.push(array2_to_polars_column("h", self.h.slice(srange)))}
+    if data.contains(&"r"){out.push(array2_to_polars_column("r", self.r.slice(srange)))}
+    if data.contains(&"ca"){out.push(array2_to_polars_column("ca", self.ca.slice(srange)))}
+    if data.contains(&"s"){out.push(array2_to_polars_column("s", self.s.slice(srange)))}
+    if data.contains(&"i_ext"){out.push(array2_to_polars_column("i_ext", self.i_ext.slice(erange)))}
+    if data.contains(&"i_app"){out.push(array2_to_polars_column("i_app", self.i_app.slice(erange)))}
+    if data.contains(&"w_g_g"){out.push(unit_to_polars_column("w_g_g", self.w_g_g.view(), num_timesteps))}
+    if data.contains(&"w_s_g"){out.push(unit_to_polars_column("w_s_g", self.w_s_g.view(), num_timesteps))}
+
+    polars::prelude::DataFrame::new(out)
     .expect("This shouldn't happend if the struct is valid")
   }
 }
