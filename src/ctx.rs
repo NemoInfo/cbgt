@@ -7,6 +7,7 @@
 
 use ndarray::{Array1, Array2, ArrayView1};
 use ndarray_rand::{rand::SeedableRng, rand_distr::Open01, RandomExt};
+use pyo3::{PyAny, Python};
 use struct_field_names_as_array::FieldNamesAsSlice;
 
 use crate::{
@@ -22,10 +23,72 @@ impl Neuron for CTX {
   const TYPE: &'static str = "CTX";
 }
 
-#[derive(FieldNamesAsSlice, Debug, Default)]
+#[derive(FieldNamesAsSlice, Debug)]
 pub struct CTXPopulationBoundryConditions {
   pub count: usize,
-  pub stimuli: Array2<f64>,
+  pub stimuli: pyo3::Py<PyAny>,
+}
+
+pub struct CTXHistory {
+  pub s: Array2<f64>,
+  pub stimuli_f: pyo3::Py<PyAny>,
+}
+
+impl CTXHistory {
+  pub fn new(
+    num_timesteps: usize,
+    ctx_count: usize,
+    edge_resolution: usize,
+    bc: CTXPopulationBoundryConditions,
+  ) -> Self {
+    Self { s: Array2::zeros((num_timesteps * edge_resolution, ctx_count)), stimuli_f: bc.stimuli }
+  }
+
+  pub fn fill_s(&mut self, py: Python, p: &CTXParameters, start_time: f64, end_time: f64, dt: f64) {
+    let stim = vectorize_i_ext_py(py, &self.stimuli_f, start_time, end_time, dt, self.s.shape()[1]);
+    let rates = stimuli_to_firing_rates(&stim, p.stimulated_rate, p.base_rate, p.sig_s, p.max_rate);
+    let spikes = firing_rates_to_cortical_spikes(&rates, dt);
+    let spikes = enforce_min_inter_spike_interval(&spikes, dt);
+    let syn_ctx = convolve_spike_train(&spikes, p.syn_rayleigh_sig, dt, p.syn_kernel_len);
+    let max_val = syn_ctx.fold(f64::MIN, |a, &b| a.max(b));
+    self.s = syn_ctx / max_val;
+  }
+
+  pub fn into_compressed_polars_df(
+    &self,
+    idt: f64,
+    odt: Option<f64>,
+    edge_resolution: usize,
+    data: &Vec<&str>,
+    start_time: f64,
+  ) -> polars::prelude::DataFrame {
+    let num_timesteps = self.s.nrows() / edge_resolution;
+    let odt = odt.unwrap_or(1.); // ms
+    let step = odt / idt;
+    if step != step.trunc() {
+      log::warn!(
+        "output_dt / simulation_dt = {step} is not integer. With a step of {} => output_dt = {}",
+        step.trunc(),
+        step.trunc() * idt
+      );
+    }
+    let step = step.trunc() as usize;
+    let output_dt = step as f64 * idt;
+    let erange = ndarray::s![0..num_timesteps * edge_resolution;step * edge_resolution, ..];
+    let num_timesteps = (0..num_timesteps).step_by(step).len();
+    let time = start_time +
+      (Array1::range(0., num_timesteps as f64, 1.) * output_dt).to_shape((num_timesteps, 1)).unwrap().to_owned();
+
+    let mut out = vec![];
+    if data.contains(&"time") {
+      out.push(array2_to_polars_column("time", time.view()))
+    }
+    if data.contains(&"s") {
+      out.push(array2_to_polars_column("s", self.s.slice(erange)))
+    }
+
+    polars::prelude::DataFrame::new(out).expect("This shouldn't happend if the struct is valid")
+  }
 }
 
 impl CTXPopulationBoundryConditions {
@@ -40,10 +103,9 @@ impl CTXPopulationBoundryConditions {
 pub type BuilderCTXBoundary = Builder<CTX, Boundary, CTXPopulationBoundryConditions>;
 
 impl Builder<CTX, Boundary, CTXPopulationBoundryConditions> {
-  pub fn finish(self, ctx_count: usize, dt: f64, total_t: f64, edge_resolution: u8) -> CTXPopulationBoundryConditions {
-    let stimuli_f =
+  pub fn finish(self, ctx_count: usize) -> CTXPopulationBoundryConditions {
+    let stimuli =
       toml_py_function_qualname_to_py_object(self.map.get("stimuli").expect("default should be set by caller"));
-    let stimuli = vectorize_i_ext_py(&stimuli_f, dt / (edge_resolution as f64), total_t, ctx_count);
 
     CTXPopulationBoundryConditions { count: ctx_count, stimuli }
   }
@@ -55,18 +117,7 @@ impl Build<CTX, Boundary> for CTXPopulationBoundryConditions {
   const PYTHON_CALLABLE_FIELD_NAMES: &[&'static str] = &["stimuli"];
 }
 
-impl CTXPopulationBoundryConditions {
-  pub fn to_syn_ctx(self, p: &CTXParameters, dt: f64) -> Array2<f64> {
-    let rates = stimuli_to_firing_rates(&self.stimuli, p.stimulated_rate, p.base_rate, p.sig_s, p.max_rate);
-    let spikes = firing_rates_to_cortical_spikes(&rates, dt);
-    let spikes = enforce_min_inter_spike_interval(&spikes, dt);
-    let syn_ctx = convolve_spike_train(&spikes, p.syn_rayleigh_sig, dt, p.syn_kernel_len);
-    let max_val = syn_ctx.fold(f64::MIN, |a, &b| a.max(b));
-    let syn_ctx = syn_ctx / max_val;
-
-    syn_ctx
-  }
-}
+impl CTXPopulationBoundryConditions {}
 
 fn p_si_given_sj(si: f64, sj: f64, sig_s: f64) -> f64 {
   1. / (1. + ((si - sj) / sig_s).powi(2))
@@ -155,36 +206,4 @@ fn rayleigh_kernel(sigma_ray: f64, dt: f64, length: usize) -> Array1<f64> {
     let t = i as f64 * dt;
     (t / (sigma_ray * sigma_ray)) * f64::exp(-t * t / (2. * sigma_ray * sigma_ray))
   }))
-}
-
-
-#[rustfmt::skip]
-pub fn ctx_syn_into_compressed_polars_df(
-  ctx_syn: &Array2<f64>,
-  idt: f64,
-  odt: Option<f64>,
-  edge_resolution: usize,
-  data: &Vec<&str>,
-) -> polars::prelude::DataFrame {
-  let num_timesteps = ctx_syn.nrows() / edge_resolution;
-  let odt = odt.unwrap_or(1.); // ms
-  let step = odt / idt;
-  if step != step.trunc() {
-    log::warn!(
-      "output_dt / simulation_dt = {step} is not integer. With a step of {} => output_dt = {}",
-      step.trunc(),
-      step.trunc() * idt
-    );
-  }
-  let step = step.trunc() as usize;
-  let output_dt = step as f64 * idt;
-  let erange = ndarray::s![0..num_timesteps * edge_resolution;step * edge_resolution, ..];
-  let num_timesteps = (0..num_timesteps).step_by(step).len();
-  let time = (Array1::range(0., num_timesteps as f64, 1.) * output_dt).to_shape((num_timesteps, 1)).unwrap().to_owned();
-
-  let mut out = vec![];
-  if data.contains(&"time"){out.push(array2_to_polars_column("time", time.view()))}
-  if data.contains(&"s"){out.push(array2_to_polars_column("s", ctx_syn.slice(erange)))}
-
-  polars::prelude::DataFrame::new(out).expect("This shouldn't happend if the struct is valid")
 }

@@ -2,8 +2,9 @@ use std::fmt::Debug;
 use std::ops::Add;
 use std::ops::Mul;
 
-use log::debug;
 use ndarray::{s, Array1, Array2, ArrayBase, ArrayView1, Ix1, Ix2, OwnedRepr, ViewRepr};
+use pyo3::Python;
+use pyo3::{Py, PyAny};
 use struct_field_names_as_array::FieldNamesAsSlice;
 
 use crate::parameters::STRParameters;
@@ -19,7 +20,7 @@ impl Neuron for STR {
 
 pub type STRConfig = NeuronConfig<STR, STRParameters, STRPopulationBoundryConditions>;
 
-#[derive(FieldNamesAsSlice, Debug, Default)]
+#[derive(FieldNamesAsSlice, Debug)]
 pub struct STRPopulationBoundryConditions {
   pub count: usize,
   // State
@@ -30,7 +31,7 @@ pub struct STRPopulationBoundryConditions {
   pub s: Array1<f64>,
   pub w_str: Array2<f64>,
   pub w_ctx: Array2<f64>,
-  pub i_ext: Array2<f64>,
+  pub i_ext: Py<PyAny>,
 }
 
 impl Build<STR, Boundary> for STRPopulationBoundryConditions {
@@ -40,14 +41,7 @@ impl Build<STR, Boundary> for STRPopulationBoundryConditions {
 pub type BuilderSTRBoundary = Builder<STR, Boundary, STRPopulationBoundryConditions>;
 
 impl Builder<STR, Boundary, STRPopulationBoundryConditions> {
-  pub fn finish(
-    self,
-    str_count: usize,
-    ctx_count: usize,
-    dt: f64,
-    total_t: f64,
-    edge_resolution: u8,
-  ) -> STRPopulationBoundryConditions {
+  pub fn finish(self, str_count: usize, ctx_count: usize) -> STRPopulationBoundryConditions {
     // TODO: Decide what should happen with the defaults?
     // Instead of zero it should panic if top level use_default is set to false
     let zero = Array1::zeros(str_count);
@@ -71,11 +65,10 @@ impl Builder<STR, Boundary, STRPopulationBoundryConditions> {
       self.map.get("s").map(try_toml_value_to_1darray::<f64>).map_or(zero.clone(), |x| x.expect("invalid bc dim s"));
     assert_eq!(s.len(), str_count);
 
-    let i_ext_f =
-      toml_py_function_qualname_to_py_object(self.map.get("i_ext").expect("default should be set by caller"));
-    let i_ext = vectorize_i_ext_py(&i_ext_f, dt / (edge_resolution as f64), total_t, str_count);
-    assert_eq!(i_ext.shape()[1], str_count);
-    debug!("STR I_ext vectorized to\n{i_ext}");
+    let i_ext = toml_py_function_qualname_to_py_object(self.map.get("i_ext").expect("default should be set by caller"));
+    // let i_ext = vectorize_i_ext_py(&i_ext_f, dt / (edge_resolution as f64), total_t, str_count);
+    // assert_eq!(i_ext.shape()[1], str_count);
+    // debug!("STR I_ext vectorized to\n{i_ext}");
 
     let w_str = self
       .map
@@ -122,13 +115,13 @@ impl STRPopulationBoundryConditions {
   }
 }
 
-#[derive(Default, Clone)]
 pub struct STRHistory {
   pub v: Array2<f64>,
   pub n: Array2<f64>,
   pub h: Array2<f64>,
   pub r: Array2<f64>,
   pub s: Array2<f64>,
+  pub i_ext_f: Py<PyAny>,
   pub i_ext: Array2<f64>,
   pub w_str: Array2<f64>,
   pub ca_syn_str: Array2<f64>,
@@ -136,8 +129,14 @@ pub struct STRHistory {
 }
 
 impl STRHistory {
-  pub fn new(num_timesteps: usize, str_count: usize, ctx_count: usize, edge_resolution: usize) -> Self {
-    Self {
+  pub fn new(
+    num_timesteps: usize,
+    str_count: usize,
+    ctx_count: usize,
+    edge_resolution: usize,
+    bc: STRPopulationBoundryConditions,
+  ) -> Self {
+    let mut res = Self {
       v: Array2::zeros((num_timesteps, str_count)),
       n: Array2::zeros((num_timesteps, str_count)),
       h: Array2::zeros((num_timesteps, str_count)),
@@ -146,20 +145,23 @@ impl STRHistory {
       w_str: Array2::zeros((str_count, str_count)),
       ca_syn_str: Array2::zeros((str_count, str_count)),
       i_ext: Array2::zeros((num_timesteps * edge_resolution, str_count)),
+      i_ext_f: bc.i_ext,
       w_ctx: Array2::zeros((ctx_count, ctx_count)),
-    }
+    };
+    res.v.row_mut(0).assign(&bc.v);
+    res.n.row_mut(0).assign(&bc.n);
+    res.h.row_mut(0).assign(&bc.h);
+    res.r.row_mut(0).assign(&bc.r);
+    res.s.row_mut(0).assign(&bc.s);
+    res.w_str.assign(&bc.w_str);
+    res.w_ctx.assign(&bc.w_ctx);
+
+    res
   }
 
-  pub fn with_bcs(mut self, bc: STRPopulationBoundryConditions) -> Self {
-    self.v.row_mut(0).assign(&bc.v);
-    self.n.row_mut(0).assign(&bc.n);
-    self.h.row_mut(0).assign(&bc.h);
-    self.r.row_mut(0).assign(&bc.r);
-    self.s.row_mut(0).assign(&bc.s);
-    self.w_str.assign(&bc.w_str);
-    self.w_ctx.assign(&bc.w_ctx);
-    self.i_ext.assign(&bc.i_ext);
-    self
+  pub fn fill_i_ext(&mut self, py: Python, start_time: f64, end_time: f64, dt: f64) {
+    let neurons = self.i_ext.shape()[1];
+    self.i_ext = vectorize_i_ext_py(py, &self.i_ext_f, start_time, end_time, dt, neurons);
   }
 
   pub fn insert(&mut self, it: usize, y: &STRState<OwnedRepr<f64>>) {
@@ -168,6 +170,14 @@ impl STRHistory {
     self.r.row_mut(it).assign(&y.r);
     self.h.row_mut(it).assign(&y.h);
     self.s.row_mut(it).assign(&y.s);
+  }
+
+  pub fn roll(&mut self) {
+    roll_time_series(self.v.view_mut());
+    roll_time_series(self.n.view_mut());
+    roll_time_series(self.h.view_mut());
+    roll_time_series(self.r.view_mut());
+    roll_time_series(self.s.view_mut());
   }
 
   pub fn row<'a>(&'a self, it: usize) -> STRState<ViewRepr<&'a f64>> {
@@ -378,6 +388,7 @@ impl STRHistory {
     odt: Option<f64>,
     edge_resolution: usize,
     data: &Vec<&str>,
+    start_time: f64,
   ) -> polars::prelude::DataFrame {
     let num_timesteps = self.v.nrows();
     let odt = odt.unwrap_or(1.); // ms
@@ -396,7 +407,7 @@ impl STRHistory {
 
     let num_timesteps = self.v.slice(srange).nrows();
 
-    let time =
+    let time = start_time + 
       (Array1::range(0., num_timesteps as f64, 1.) * output_dt).to_shape((num_timesteps, 1)).unwrap().to_owned();
 
     let mut out = vec![];

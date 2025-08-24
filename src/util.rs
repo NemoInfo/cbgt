@@ -1,4 +1,5 @@
-use ndarray::{Array2, Dimension};
+use ndarray::{s, Array2, Dimension};
+use numpy::{PyArray, PyArray2, PyArrayMethods};
 use polars::frame::column::ScalarColumn;
 use pyo3::prelude::*;
 
@@ -150,18 +151,48 @@ pub fn toml_py_function_qualname_to_py_object(val: &toml::Value) -> pyo3::PyObje
   })
 }
 
-pub fn vectorize_i_ext_py(i_ext_py: &PyObject, dt: f64, total_t: f64, num_neurons: usize) -> Array2<f64> {
-  let num_timesteps: usize = (total_t / dt) as usize;
+pub fn vectorize_i_ext_py(
+  py: Python,
+  i_ext_py: &PyObject,
+  start_time: f64,
+  end_time: f64,
+  dt: f64,
+  num_neurons: usize,
+) -> Array2<f64> {
+  let total_time = end_time - start_time;
+  let num_timesteps: usize = (total_time / dt) as usize;
+  let np = PyModule::import(py, "numpy").expect("Numpy needed");
+  let vectorized = np.getattr("vectorize").unwrap().call1((i_ext_py,)).unwrap();
+  let t = PyArray::from_vec2(py, &(0..num_timesteps).map(|it| vec![it as f64 * dt + start_time]).collect::<Vec<_>>())
+    .unwrap();
+  let n = PyArray::from_vec2(py, &[(0..num_neurons).collect()]).unwrap();
+  let res = vectorized.call1((t, n)).unwrap();
+  let result = res.downcast::<PyArray2<f64>>().unwrap();
+  let res = unsafe { result.as_array() }.into_owned();
+  res
+}
+
+pub fn _vectorize_i_ext_py(
+  i_ext_py: &PyObject,
+  start_time: f64,
+  end_time: f64,
+  dt: f64,
+  num_neurons: usize,
+) -> Array2<f64> {
+  let total_time = end_time - start_time;
+  let num_timesteps: usize = (total_time / dt) as usize;
   pyo3::prepare_freethreaded_python();
-  Python::with_gil(|py| {
-    let mut a = Array2::<f64>::zeros((num_timesteps, num_neurons));
-    for n in 0..num_neurons {
-      for it in 0..num_timesteps {
-        a[[it, n]] = i_ext_py.call1(py, (it as f64 * dt, n)).unwrap().extract(py).unwrap();
-      }
-    }
-    a
-  })
+  let res = Python::with_gil(|py| {
+    let np = PyModule::import(py, "numpy").expect("Numpy needed");
+    let vectorized = np.getattr("vectorize").unwrap().call1((i_ext_py,)).unwrap();
+    let t = PyArray::from_vec2(py, &(0..num_timesteps).map(|it| vec![it as f64 * dt + start_time]).collect::<Vec<_>>())
+      .unwrap();
+    let n = PyArray::from_vec2(py, &[(0..num_neurons).collect()]).unwrap();
+    let res = vectorized.call1((t, n)).unwrap();
+    let result = res.downcast::<PyArray2<f64>>().unwrap();
+    unsafe { result.as_array() }.into_owned()
+  });
+  res
 }
 
 #[allow(unused)]
@@ -419,4 +450,14 @@ where
   fn iax(self, axis: usize) -> ndarray::ArrayBase<S, D::Larger> {
     self.insert_axis(ndarray::Axis(axis))
   }
+}
+
+pub fn roll_time_series(mut array: ndarray::ArrayViewMut2<f64>) {
+  let (mut a0, a1) = array.multi_slice_mut((s![0, ..], s![array.nrows() - 1, ..]));
+  a0.assign(&a1);
+}
+
+#[inline(always)]
+pub fn wrap_idx(idx: isize, len: usize) -> usize {
+  (idx + (len as isize & (idx >> (isize::BITS - 1)))) as usize
 }

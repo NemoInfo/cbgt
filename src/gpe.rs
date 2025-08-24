@@ -1,9 +1,9 @@
 use std::fmt::Debug;
 use std::ops::{Add, Mul};
 
-use log::debug;
 use ndarray::{s, Array1, Array2, ArrayView1, Ix2, OwnedRepr, ViewRepr};
 use ndarray::{ArrayBase, Ix1};
+use pyo3::{PyAny, Python};
 use struct_field_names_as_array::FieldNamesAsSlice;
 
 use crate::parameters::GPeParameters;
@@ -20,7 +20,7 @@ impl Neuron for GPe {
 
 pub type GPeConfig = NeuronConfig<GPe, GPeParameters, GPePopulationBoundryConditions>;
 
-#[derive(FieldNamesAsSlice, Debug, Default)]
+#[derive(FieldNamesAsSlice, Debug)]
 pub struct GPePopulationBoundryConditions {
   pub count: usize,
   // State
@@ -30,8 +30,8 @@ pub struct GPePopulationBoundryConditions {
   pub r: Array1<f64>,
   pub ca: Array1<f64>,
   pub s: Array1<f64>,
-  pub i_ext: Array2<f64>,
-  pub i_app: Array2<f64>,
+  pub i_ext: pyo3::Py<PyAny>,
+  pub i_app: pyo3::Py<PyAny>,
 
   // Connection Matrice
   pub w_g_g: Array2<f64>,
@@ -49,15 +49,7 @@ impl Build<GPe, Boundary> for GPePopulationBoundryConditions {
 pub type BuilderGPeBoundary = Builder<GPe, Boundary, GPePopulationBoundryConditions>;
 
 impl BuilderGPeBoundary {
-  pub fn finish(
-    self,
-    gpe_count: usize,
-    stn_count: usize,
-    str_count: usize,
-    dt: f64,
-    total_t: f64,
-    edge_resolution: u8,
-  ) -> GPePopulationBoundryConditions {
+  pub fn finish(self, gpe_count: usize, stn_count: usize, str_count: usize) -> GPePopulationBoundryConditions {
     let pbc = Array1::zeros(gpe_count);
 
     let v =
@@ -79,16 +71,8 @@ impl BuilderGPeBoundary {
       self.map.get("s").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim s"));
     assert_eq!(s.len(), gpe_count);
 
-    let i_ext_f =
-      toml_py_function_qualname_to_py_object(self.map.get("i_ext").expect("default should be set by caller"));
-    let i_ext = vectorize_i_ext_py(&i_ext_f, dt / (edge_resolution as f64), total_t, gpe_count);
-
-    let i_app_f =
-      toml_py_function_qualname_to_py_object(self.map.get("i_app").expect("default should be set by caller"));
-    let i_app = vectorize_i_ext_py(&i_app_f, dt / (edge_resolution as f64), total_t, gpe_count);
-
-    debug!("GPe I_ext vectorized to\n{i_ext}");
-    debug!("GPe I_app vectorized to\n{i_app}");
+    let i_ext = toml_py_function_qualname_to_py_object(self.map.get("i_ext").expect("default should be set by caller"));
+    let i_app = toml_py_function_qualname_to_py_object(self.map.get("i_app").expect("default should be set by caller"));
 
     let w_g_g = self
       .map
@@ -219,7 +203,7 @@ where
     s_str: &ArrayView1<f64>,
     i_ext: &ArrayView1<f64>,
     i_app: &ArrayView1<f64>,
-  ) -> GPeState<OwnedRepr<f64>> {
+  ) -> (GPeState<OwnedRepr<f64>>, [Array1<f64>; 3]) {
     let Self { v, n, h, r, ca, s, w_g_g, w_s_g, w_str, ca_g_g, ca_s_g, ca_str } = self;
 
     let n_oo = x_oo(v, p.tht_n, p.sig_n);
@@ -245,7 +229,7 @@ where
 
     // Update state
     let dy = GPeState {
-      v: -i_l - i_k - i_na - &i_t - &i_ca - i_ahp - i_s_g - i_g_g - i_str - i_ext + i_app,
+      v: -i_l - i_k - i_na - &i_t - &i_ca - &i_ahp - &i_s_g - &i_g_g - &i_str - i_ext + i_app,
       n: p.phi_n * (n_oo - n) / tau_n,
       h: p.phi_h * (h_oo - h) / tau_h,
       r: p.phi_r * (r_oo - r) / p.tau_r,
@@ -259,7 +243,7 @@ where
       ca_str: -ca_str / p.tau_ca + p.ca_pre * &d_str.iax(1) + p.ca_post * &d_gpe.iax(0),
     };
 
-    dy
+    (dy, [i_s_g, i_str, i_g_g])
   }
 }
 
@@ -386,7 +370,6 @@ where
   }
 }
 
-#[derive(Default, Clone)]
 pub struct GPeHistory {
   pub v: Array2<f64>,
   pub n: Array2<f64>,
@@ -402,6 +385,11 @@ pub struct GPeHistory {
   pub ca_str: Array2<f64>,
   pub i_ext: Array2<f64>,
   pub i_app: Array2<f64>,
+  pub i_ext_f: pyo3::Py<PyAny>,
+  pub i_app_f: pyo3::Py<PyAny>,
+  pub i_stn: Array2<f64>,
+  pub i_str: Array2<f64>,
+  pub i_gpe: Array2<f64>,
 }
 
 impl GPeHistory {
@@ -411,8 +399,9 @@ impl GPeHistory {
     stn_count: usize,
     str_count: usize,
     edge_resolution: usize,
+    bc: GPePopulationBoundryConditions,
   ) -> Self {
-    Self {
+    let mut res = Self {
       v: Array2::zeros((num_timesteps, gpe_count)),
       n: Array2::zeros((num_timesteps, gpe_count)),
       h: Array2::zeros((num_timesteps, gpe_count)),
@@ -421,41 +410,63 @@ impl GPeHistory {
       s: Array2::zeros((num_timesteps, gpe_count)),
       i_ext: Array2::zeros((num_timesteps * edge_resolution, gpe_count)),
       i_app: Array2::zeros((num_timesteps * edge_resolution, gpe_count)),
+      i_ext_f: bc.i_ext,
+      i_app_f: bc.i_app,
       w_s_g: Array2::zeros((stn_count, gpe_count)),
       w_g_g: Array2::zeros((gpe_count, gpe_count)),
       w_str: Array2::zeros((str_count, gpe_count)),
       ca_s_g: Array2::zeros((stn_count, gpe_count)),
       ca_g_g: Array2::zeros((gpe_count, gpe_count)),
       ca_str: Array2::zeros((str_count, gpe_count)),
-    }
+      i_stn: Array2::zeros((num_timesteps, gpe_count)),
+      i_str: Array2::zeros((num_timesteps, gpe_count)),
+      i_gpe: Array2::zeros((num_timesteps, gpe_count)),
+    };
+
+    res.v.row_mut(0).assign(&bc.v);
+    res.n.row_mut(0).assign(&bc.n);
+    res.h.row_mut(0).assign(&bc.h);
+    res.r.row_mut(0).assign(&bc.r);
+    res.ca.row_mut(0).assign(&bc.ca);
+    res.s.row_mut(0).assign(&bc.s);
+    res.w_g_g.assign(&bc.w_g_g);
+    res.w_s_g.assign(&bc.w_s_g);
+    res.w_str.assign(&bc.w_str);
+    res
   }
 
-  pub fn with_bcs(mut self, bc: GPePopulationBoundryConditions) -> Self {
-    self.v.row_mut(0).assign(&bc.v);
-    self.n.row_mut(0).assign(&bc.n);
-    self.h.row_mut(0).assign(&bc.h);
-    self.r.row_mut(0).assign(&bc.r);
-    self.ca.row_mut(0).assign(&bc.ca);
-    self.s.row_mut(0).assign(&bc.s);
-    self.w_g_g.assign(&bc.w_g_g);
-    self.w_s_g.assign(&bc.w_s_g);
-    self.w_str.assign(&bc.w_str);
-    self.i_ext.assign(&bc.i_ext);
-    self.i_app.assign(&bc.i_app);
-    self
+  pub fn fill_i_ext(&mut self, py: Python, start_time: f64, end_time: f64, dt: f64) {
+    let neurons = self.i_ext.shape()[1];
+    self.i_ext = vectorize_i_ext_py(py, &self.i_ext_f, start_time, end_time, dt, neurons);
+    self.i_app = vectorize_i_ext_py(py, &self.i_app_f, start_time, end_time, dt, neurons);
   }
 
-  pub fn insert(&mut self, it: usize, y: &GPeState<OwnedRepr<f64>>) {
+  pub fn insert(&mut self, it: usize, y: &GPeState<OwnedRepr<f64>>, [i_stn, i_str, i_gpe]: [Array1<f64>; 3]) {
     self.v.row_mut(it).assign(&y.v);
     self.n.row_mut(it).assign(&y.n);
     self.r.row_mut(it).assign(&y.r);
     self.h.row_mut(it).assign(&y.h);
     self.ca.row_mut(it).assign(&y.ca);
     self.s.row_mut(it).assign(&y.s);
+    self.i_stn.row_mut(it).assign(&i_stn);
+    self.i_str.row_mut(it).assign(&i_str);
+    self.i_gpe.row_mut(it).assign(&i_gpe);
     self.w_s_g = y.w_s_g.clone();
     self.w_g_g = y.w_g_g.clone();
     self.ca_s_g = y.ca_s_g.clone();
     self.ca_g_g = y.ca_g_g.clone();
+  }
+
+  pub fn roll(&mut self) {
+    roll_time_series(self.v.view_mut());
+    roll_time_series(self.n.view_mut());
+    roll_time_series(self.h.view_mut());
+    roll_time_series(self.r.view_mut());
+    roll_time_series(self.ca.view_mut());
+    roll_time_series(self.s.view_mut());
+    roll_time_series(self.i_stn.view_mut());
+    roll_time_series(self.i_str.view_mut());
+    roll_time_series(self.i_gpe.view_mut());
   }
 
   pub fn row<'a>(&'a self, it: usize) -> GPeState<ViewRepr<&'a f64>> {
@@ -482,6 +493,7 @@ impl GPeHistory {
     odt: Option<f64>,
     edge_resolution: usize,
     data: &Vec<&str>,
+    start_time: f64
   ) -> polars::prelude::DataFrame {
     let num_timesteps = self.v.nrows();
     let odt = odt.unwrap_or(1.); // ms
@@ -500,10 +512,8 @@ impl GPeHistory {
 
     let num_timesteps = self.v.slice(srange).nrows();
 
-    let time = (ndarray::Array1::range(0., num_timesteps as f64, 1.) * output_dt)
-      .to_shape((num_timesteps, 1))
-      .unwrap()
-      .to_owned();
+    let time = start_time + 
+      (ndarray::Array1::range(0., num_timesteps as f64, 1.) * output_dt).to_shape((num_timesteps, 1)).unwrap().to_owned();
 
 
     let mut out = vec![];
@@ -514,6 +524,9 @@ impl GPeHistory {
     if data.contains(&"r"){out.push(array2_to_polars_column("r", self.r.slice(srange)))}
     if data.contains(&"ca"){out.push(array2_to_polars_column("ca", self.ca.slice(srange)))}
     if data.contains(&"s"){out.push(array2_to_polars_column("s", self.s.slice(srange)))}
+    if data.contains(&"i_stn"){out.push(array2_to_polars_column("i_stn", self.i_stn.slice(srange)))}
+    if data.contains(&"i_str"){out.push(array2_to_polars_column("i_str", self.i_str.slice(srange)))}
+    if data.contains(&"i_gpe"){out.push(array2_to_polars_column("i_gpe", self.i_gpe.slice(srange)))}
     if data.contains(&"i_ext"){out.push(array2_to_polars_column("i_ext", self.i_ext.slice(erange)))}
     if data.contains(&"i_app"){out.push(array2_to_polars_column("i_app", self.i_app.slice(erange)))}
     if data.contains(&"w_g_g"){out.push(unit_to_polars_column("w_g_g", self.w_g_g.view(), num_timesteps))}

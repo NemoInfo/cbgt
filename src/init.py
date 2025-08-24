@@ -138,3 +138,14 @@ def rand_str(num):
       "str_s": np.random.choice(s, size=num, replace=True),
       "str_v": np.random.choice(v, size=num, replace=True),
   }
+
+
+def i_ext(t, n):
+  return 0 if t < 500 else 10 * n
+
+
+if __name__ == "__main__":
+  t = np.linspace(0, 1000, 1000)[:, None]
+  n = np.arange(10)[None, :]
+  f = np.vectorize(i_ext)
+  print(f(t, n))

@@ -2,8 +2,9 @@ use std::fmt::Debug;
 use std::ops::Add;
 use std::ops::Mul;
 
-use log::debug;
 use ndarray::{s, Array1, Array2, ArrayBase, ArrayView1, Ix1, Ix2, OwnedRepr, ViewRepr};
+use pyo3::PyAny;
+use pyo3::Python;
 use struct_field_names_as_array::FieldNamesAsSlice;
 
 use crate::parameters::STNParameters;
@@ -19,7 +20,7 @@ impl Neuron for STN {
 
 pub type STNConfig = NeuronConfig<STN, STNParameters, STNPopulationBoundryConditions>;
 
-#[derive(FieldNamesAsSlice, Debug, Default)]
+#[derive(FieldNamesAsSlice, Debug)]
 pub struct STNPopulationBoundryConditions {
   pub count: usize,
   // State
@@ -29,7 +30,7 @@ pub struct STNPopulationBoundryConditions {
   pub r: Array1<f64>,
   pub ca: Array1<f64>,
   pub s: Array1<f64>,
-  pub i_ext: Array2<f64>,
+  pub i_ext: pyo3::Py<PyAny>,
 
   // Connection Matrice
   pub w_gpe: Array2<f64>,
@@ -43,15 +44,7 @@ impl Build<STN, Boundary> for STNPopulationBoundryConditions {
 pub type BuilderSTNBoundary = Builder<STN, Boundary, STNPopulationBoundryConditions>;
 
 impl Builder<STN, Boundary, STNPopulationBoundryConditions> {
-  pub fn finish(
-    self,
-    stn_count: usize,
-    gpe_count: usize,
-    ctx_count: usize,
-    dt: f64,
-    total_t: f64,
-    edge_resolution: u8,
-  ) -> STNPopulationBoundryConditions {
+  pub fn finish(self, stn_count: usize, gpe_count: usize, ctx_count: usize) -> STNPopulationBoundryConditions {
     // TODO: Decide what should happen with the defaults?
     // Instead of zero it should panic if top level use_default is set to false
     let zero = Array1::zeros(stn_count);
@@ -75,11 +68,7 @@ impl Builder<STN, Boundary, STNPopulationBoundryConditions> {
       self.map.get("s").map(try_toml_value_to_1darray::<f64>).map_or(zero.clone(), |x| x.expect("invalid bc dim s"));
     assert_eq!(s.len(), stn_count);
 
-    let i_ext_f =
-      toml_py_function_qualname_to_py_object(self.map.get("i_ext").expect("default should be set by caller"));
-    let i_ext = vectorize_i_ext_py(&i_ext_f, dt / (edge_resolution as f64), total_t, stn_count);
-    assert_eq!(i_ext.shape()[1], stn_count);
-    debug!("STN I_ext vectorized to\n{i_ext}");
+    let i_ext = toml_py_function_qualname_to_py_object(self.map.get("i_ext").expect("default should be set by caller"));
 
     let w_gpe = self
       .map
@@ -118,12 +107,6 @@ impl STNPopulationBoundryConditions {
   }
 }
 
-fn roll_time_series(mut array: ndarray::ArrayViewMut2<f64>) {
-  let (mut a0, a1) = array.multi_slice_mut((s![0, ..], s![array.nrows() - 1, ..]));
-  a0.assign(&a1);
-}
-
-#[derive(Default, Clone)]
 pub struct STNHistory {
   pub v: Array2<f64>,
   pub n: Array2<f64>,
@@ -135,7 +118,9 @@ pub struct STNHistory {
   pub ca_g_s: Array2<f64>,
   pub w_ctx: Array2<f64>,
   pub i_ext: Array2<f64>,
+  pub i_ext_f: pyo3::Py<PyAny>,
   pub i_gpe: Array2<f64>,
+  pub i_ctx: Array2<f64>,
 }
 
 // How about: the structure of my noise, not really because i want to enforce a min_isi is
@@ -154,8 +139,9 @@ impl STNHistory {
     gpe_count: usize,
     ctx_count: usize,
     edge_resolution: usize,
+    bc: STNPopulationBoundryConditions,
   ) -> Self {
-    Self {
+    let mut res = Self {
       v: Array2::zeros((num_timesteps, stn_count)),
       n: Array2::zeros((num_timesteps, stn_count)),
       h: Array2::zeros((num_timesteps, stn_count)),
@@ -166,17 +152,38 @@ impl STNHistory {
       ca_g_s: Array2::zeros((gpe_count, stn_count)),
       w_ctx: Array2::zeros((ctx_count, stn_count)),
       i_ext: Array2::zeros((num_timesteps * edge_resolution, stn_count)),
+      i_ext_f: bc.i_ext,
       i_gpe: Array2::zeros((num_timesteps, stn_count)),
-    }
+      i_ctx: Array2::zeros((num_timesteps, stn_count)),
+    };
+
+    res.v.row_mut(0).assign(&bc.v);
+    res.n.row_mut(0).assign(&bc.n);
+    res.h.row_mut(0).assign(&bc.h);
+    res.r.row_mut(0).assign(&bc.r);
+    res.ca.row_mut(0).assign(&bc.ca);
+    res.s.row_mut(0).assign(&bc.s);
+    res.w_gpe.assign(&bc.w_gpe);
+    res.w_ctx.assign(&bc.w_ctx);
+
+    res
+  }
+
+  pub fn fill_i_ext(&mut self, py: Python, start_time: f64, end_time: f64, dt: f64) {
+    let neurons = self.i_ext.shape()[1];
+    self.i_ext = vectorize_i_ext_py(py, &self.i_ext_f, start_time, end_time, dt, neurons);
   }
 
   pub fn roll(&mut self) {
+    // FIXME check if there is an off by one with this method
     roll_time_series(self.v.view_mut());
     roll_time_series(self.n.view_mut());
+    roll_time_series(self.h.view_mut());
     roll_time_series(self.r.view_mut());
     roll_time_series(self.ca.view_mut());
     roll_time_series(self.s.view_mut());
     roll_time_series(self.i_gpe.view_mut());
+    roll_time_series(self.i_ctx.view_mut());
   }
 
   pub fn size(&self) -> usize {
@@ -190,23 +197,11 @@ impl STNHistory {
         + self.w_gpe.len()
         + self.ca_g_s.len()
         + self.i_ext.len()
-        + self.i_gpe.len())
+        + self.i_gpe.len()
+        + self.i_ctx.len())
   }
 
-  pub fn with_bcs(mut self, bc: STNPopulationBoundryConditions) -> Self {
-    self.v.row_mut(0).assign(&bc.v);
-    self.n.row_mut(0).assign(&bc.n);
-    self.h.row_mut(0).assign(&bc.h);
-    self.r.row_mut(0).assign(&bc.r);
-    self.ca.row_mut(0).assign(&bc.ca);
-    self.s.row_mut(0).assign(&bc.s);
-    self.w_gpe.assign(&bc.w_gpe);
-    self.w_ctx.assign(&bc.w_ctx);
-    self.i_ext.assign(&bc.i_ext);
-    self
-  }
-
-  pub fn insert(&mut self, it: usize, y: &STNState<OwnedRepr<f64>>, i_gpe: ArrayView1<f64>) {
+  pub fn insert(&mut self, it: usize, y: &STNState<OwnedRepr<f64>>, [i_gpe, i_ctx]: [Array1<f64>; 2]) {
     self.v.row_mut(it).assign(&y.v);
     self.n.row_mut(it).assign(&y.n);
     self.r.row_mut(it).assign(&y.r);
@@ -214,6 +209,7 @@ impl STNHistory {
     self.ca.row_mut(it).assign(&y.ca);
     self.s.row_mut(it).assign(&y.s);
     self.i_gpe.row_mut(it).assign(&i_gpe);
+    self.i_ctx.row_mut(it).assign(&i_ctx);
     self.w_gpe = y.w_gpe.clone();
     self.w_ctx = y.w_ctx.clone();
     self.ca_g_s = y.ca_gpe.clone();
@@ -358,7 +354,7 @@ where
     s_gpe: &ArrayView1<f64>,
     s_ctx: &ArrayView1<f64>,
     i_ext: &ArrayView1<f64>,
-  ) -> (STNState<OwnedRepr<T::Elem>>, Array1<f64>) {
+  ) -> (STNState<OwnedRepr<T::Elem>>, [Array1<f64>; 2]) {
     let Self { v, n, h, r, ca, s, w_gpe, ca_gpe: ca_g_s, w_ctx } = self;
     let eta_d: f64 = 0.01; // @TODO -> Factor this into parameters struct
     let eta_p: f64 = 0.0075;
@@ -410,7 +406,7 @@ where
       w_ctx: Array2::<f64>::zeros(w_ctx.raw_dim()),
     };
 
-    (dy, i_gpe)
+    (dy, [i_gpe, i_ctx])
   }
 }
 
@@ -494,6 +490,7 @@ impl STNHistory {
     odt: Option<f64>,
     edge_resolution: usize,
     data: &Vec<&str>,
+    start_time: f64,
   ) -> polars::prelude::DataFrame {
     let num_timesteps = self.v.nrows();
     let odt = odt.unwrap_or(1.); // ms
@@ -512,8 +509,8 @@ impl STNHistory {
 
     let num_timesteps = self.v.slice(srange).nrows();
 
-    let time =
-      (Array1::range(0., num_timesteps as f64, 1.) * output_dt).to_shape((num_timesteps, 1)).unwrap().to_owned();
+    let time = start_time +
+      (Array1::range(0., num_timesteps as f64, 1.) * output_dt).to_shape((num_timesteps, 1)).unwrap().to_owned() ;
 
     let mut out = vec![];
     if data.contains(&"time")  { out.push(array2_to_polars_column("time",  time      .view())) }
@@ -525,6 +522,7 @@ impl STNHistory {
     if data.contains(&"s")     { out.push(array2_to_polars_column("s",     self.s    .slice(srange))) }
     if data.contains(&"i_ext") { out.push(array2_to_polars_column("i_ext", self.i_ext.slice(erange))) }
     if data.contains(&"i_gpe") { out.push(array2_to_polars_column("i_gpe", self.i_gpe.slice(srange))) }
+    if data.contains(&"i_ctx") { out.push(array2_to_polars_column("i_ctx", self.i_ctx.slice(srange))) }
     if data.contains(&"w_gpe") { out.push(  unit_to_polars_column("w_gpe", self.w_gpe.view(), num_timesteps)) }
 
     polars::prelude::DataFrame::new(out)

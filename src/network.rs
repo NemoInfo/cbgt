@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::str::FromStr;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use env_logger::fmt::Formatter;
@@ -7,13 +7,12 @@ use indicatif::ProgressBar;
 use indicatif::ProgressStyle;
 use log::debug;
 use ndarray::Array2;
-use numpy::IntoPyArray;
 use pyo3::{prelude::*, types::PyDict};
 use std::io::Write;
 
-use crate::ctx::ctx_syn_into_compressed_polars_df;
 use crate::ctx::BuilderCTXBoundary;
 use crate::ctx::CTXConfig;
+use crate::ctx::CTXHistory;
 use crate::gpe::*;
 use crate::gpi::*;
 use crate::parameters::*;
@@ -22,6 +21,7 @@ use crate::str::BuilderSTRBoundary;
 use crate::str::STRConfig;
 use crate::str::STRHistory;
 use crate::types::{Boundary, NeuronData};
+use crate::util::wrap_idx;
 use crate::util::{format_number, write_boundary_file, write_parameter_file, write_temp_pyf_file, SpinBarrier};
 use crate::PYF_FILE_NAME;
 use crate::{gpe::GPeHistory, GPeParameters};
@@ -32,7 +32,7 @@ pub struct Network {
   #[pyo3(get)]
   pub dt: f64,
   #[pyo3(get)]
-  pub total_t: f64,
+  pub total_time: f64,
   pub str: STRHistory,
   pub str_p: STRParameters,
   pub stn: STNHistory,
@@ -41,7 +41,8 @@ pub struct Network {
   pub gpe_p: GPeParameters,
   pub gpi: GPiHistory,
   pub gpi_p: GPiParameters,
-  pub ctx: Array2<f64>,
+  pub ctx: CTXHistory,
+  pub ctx_p: CTXParameters,
   pub batch_duration: f64,
 }
 
@@ -54,51 +55,67 @@ struct RunOutput {
 }
 
 impl Network {
-  fn run_rk4(&mut self, data: &Vec<&str>) -> RunOutput {
-    // TODO figure out total_t thingy
-    let iterations = (self.total_t / self.batch_duration).floor() as usize;
-    let _ds = self.run_rk4_batch();
-    let mut stn = self.stn.into_compressed_polars_df(self.dt, None, 2, data);
-    let mut str = self.str.into_compressed_polars_df(self.dt, None, 2, data);
-    let mut gpe = self.gpe.into_compressed_polars_df(self.dt, None, 2, data);
-    let mut gpi = self.gpi.into_compressed_polars_df(self.dt, None, 2, data);
-    let mut ctx = ctx_syn_into_compressed_polars_df(&self.ctx, self.dt, None, 2, &data);
-    for _it in 1..iterations + 1 {
-      let _ds = self.run_rk4_batch();
-      // TODO Also synchronize i_ext and stimuli
-
-      stn = stn.vstack(&self.stn.into_compressed_polars_df(self.dt, None, 2, data)).unwrap();
-      str = str.vstack(&self.str.into_compressed_polars_df(self.dt, None, 2, data)).unwrap();
-      gpe = gpe.vstack(&self.gpe.into_compressed_polars_df(self.dt, None, 2, data)).unwrap();
-      gpi = gpi.vstack(&self.gpi.into_compressed_polars_df(self.dt, None, 2, data)).unwrap();
-      ctx = ctx.vstack(&ctx_syn_into_compressed_polars_df(&self.ctx, self.dt, None, 2, &data)).unwrap();
+  fn run_rk4(&mut self, data: &Vec<&str>, odt: Option<f64>) -> RunOutput {
+    let total_timesteps = (self.total_time / odt.unwrap_or(1.)) as usize;
+    let batches = (self.total_time / self.batch_duration).ceil() as usize - 1;
+    _ = self.run_rk4_batch(0., self.batch_duration);
+    let mut stn = self.stn.into_compressed_polars_df(self.dt, odt, 2, data, 0.);
+    let mut str = self.str.into_compressed_polars_df(self.dt, odt, 2, data, 0.);
+    let mut gpe = self.gpe.into_compressed_polars_df(self.dt, odt, 2, data, 0.);
+    let mut gpi = self.gpi.into_compressed_polars_df(self.dt, odt, 2, data, 0.);
+    let mut ctx = self.ctx.into_compressed_polars_df(self.dt, odt, 2, data, 0.);
+    for batch in 1..batches + 1 {
+      let start_time = self.batch_duration * batch as f64;
+      self.roll();
+      _ = self.run_rk4_batch(start_time, (start_time + self.batch_duration).min(self.total_time));
+      stn = stn.vstack(&self.stn.into_compressed_polars_df(self.dt, odt, 2, data, start_time)).unwrap();
+      str = str.vstack(&self.str.into_compressed_polars_df(self.dt, odt, 2, data, start_time)).unwrap();
+      gpe = gpe.vstack(&self.gpe.into_compressed_polars_df(self.dt, odt, 2, data, start_time)).unwrap();
+      gpi = gpi.vstack(&self.gpi.into_compressed_polars_df(self.dt, odt, 2, data, start_time)).unwrap();
+      ctx = ctx.vstack(&self.ctx.into_compressed_polars_df(self.dt, odt, 2, data, start_time)).unwrap();
     }
 
-    polars::frame::DataFrame::align_chunks_par(&mut stn);
-    polars::frame::DataFrame::align_chunks_par(&mut str);
-    polars::frame::DataFrame::align_chunks_par(&mut gpe);
-    polars::frame::DataFrame::align_chunks_par(&mut gpi);
-    polars::frame::DataFrame::align_chunks_par(&mut ctx);
+    stn.rechunk_mut();
+    str.rechunk_mut();
+    gpe.rechunk_mut();
+    gpi.rechunk_mut();
+    ctx.rechunk_mut();
+
+    stn = stn.slice(0, total_timesteps);
+    str = str.slice(0, total_timesteps);
+    gpe = gpe.slice(0, total_timesteps);
+    gpi = gpi.slice(0, total_timesteps);
+    ctx = ctx.slice(0, total_timesteps);
 
     RunOutput { stn, str, gpe, gpi, ctx }
   }
 
-  fn run_rk4_batch(&mut self) -> (Array2<f64>, Array2<f64>, Array2<f64>, Array2<f64>) {
-    let num_timesteps: usize = (self.total_t / self.dt) as usize;
+  fn roll(&mut self) {
+    self.stn.roll();
+    self.str.roll();
+    self.gpe.roll();
+    self.gpi.roll();
+  }
+
+  fn run_rk4_batch(&mut self, start_time: f64, end_time: f64) -> (Array2<f64>, Array2<f64>, Array2<f64>, Array2<f64>) {
+    let Self { dt, total_time, str, str_p, stn, stn_p, gpe, gpe_p, gpi, gpi_p, ctx, ctx_p, batch_duration } = self;
+    let dt = *dt;
+
+    let duration = end_time - start_time;
+    let num_timesteps: usize = (duration / dt) as usize;
+    let batch_idx = (start_time / *batch_duration) as usize + 1;
+    let batches = (*total_time / *batch_duration).ceil() as usize;
 
     debug!("Computing {} timesteps", format_number(num_timesteps));
 
-    let stn_p = self.stn_p.clone();
-    let gpe_p = self.gpe_p.clone();
-    let gpi_p = self.gpi_p.clone();
-    let str_p = self.str_p.clone();
-    let dt = self.dt;
-
-    let stn = &mut self.stn;
-    let gpe = &mut self.gpe;
-    let gpi = &mut self.gpi;
-    let str = &mut self.str;
-    let ctx = &self.ctx;
+    pyo3::prepare_freethreaded_python();
+    Python::with_gil(|py| {
+      str.fill_i_ext(py, start_time, end_time, dt / 2.);
+      stn.fill_i_ext(py, start_time, end_time, dt / 2.);
+      gpe.fill_i_ext(py, start_time, end_time, dt / 2.);
+      gpi.fill_i_ext(py, start_time, end_time, dt / 2.);
+      ctx.fill_s(py, ctx_p, start_time, end_time, dt / 2.);
+    });
 
     let mut dd_stn = DiracDeltaState::new(stn.v.raw_dim());
     let d_stn_ref = unsafe { ndarray::ArrayView2::from_shape_ptr(dd_stn.d.raw_dim(), dd_stn.d.as_ptr()) };
@@ -110,12 +127,11 @@ impl Network {
     let mut dd_str = DiracDeltaState::new(str.v.raw_dim());
     let d_str_ref = unsafe { ndarray::ArrayView2::from_shape_ptr(dd_str.d.raw_dim(), dd_str.d.as_ptr()) };
 
-    let s_ctx_ref = unsafe { ndarray::ArrayView2::from_shape_ptr(ctx.raw_dim(), ctx.as_ptr()) };
-
     let stn_s = unsafe { ndarray::ArrayView2::from_shape_ptr(stn.s.raw_dim(), stn.s.as_ptr()) };
     let str_s = unsafe { ndarray::ArrayView2::from_shape_ptr(str.s.raw_dim(), str.s.as_ptr()) };
     let gpe_s = unsafe { ndarray::ArrayView2::from_shape_ptr(gpe.s.raw_dim(), gpe.s.as_ptr()) };
     let _gpi_s = unsafe { ndarray::ArrayView2::from_shape_ptr(gpi.s.raw_dim(), gpi.s.as_ptr()) };
+    let ctx_s = unsafe { ndarray::ArrayView2::from_shape_ptr(ctx.s.raw_dim(), ctx.s.as_ptr()) };
 
     let spin_barrier = Arc::new(SpinBarrier::new(4));
     let stn_barrier = spin_barrier.clone();
@@ -127,7 +143,10 @@ impl Network {
         let pb = ProgressBar::new(num_timesteps as u64 - 1);
         pb.set_style(
           ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
+            .template(
+              &(format!("BATCH {batch_idx}/{batches} ")
+                + "[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})"),
+            )
             .unwrap()
             .progress_chars("=> "),
         );
@@ -136,7 +155,12 @@ impl Network {
           if it % 100 == 0 {
             pb.set_position(it as u64);
           }
-          let s_ctx_ref = s_ctx_ref.row(it.saturating_add((1. / dt) as usize));
+          let ctx_id = if batch_idx != 1 {
+            it.wrapping_sub((1. / dt) as usize) as isize // NOTE This can panick for very small batch durations, it can loop around twice
+          } else {
+            it.saturating_sub((1. / dt) as usize) as isize
+          };
+          let ctx_s = ctx_s.row(wrap_idx(ctx_id, num_timesteps) * 2);
           let edge_it = it * 2;
           let yp = &stn.row(it);
           stn_barrier.sym_sync_call(|| dd_stn.update(&yp.v, dt, it));
@@ -146,15 +170,14 @@ impl Network {
           let d_gpe = d_gpe_ref.row(it);
           let gpe_s = gpe_s.row(it);
 
-          let (k1, i_gpe) = yp.dydt(&stn_p, &d_stn, &d_gpe, &gpe_s, &s_ctx_ref, &stn.i_ext.row(edge_it));
+          let (k1, is) = yp.dydt(&stn_p, &d_stn, &d_gpe, &gpe_s, &ctx_s, &stn.i_ext.row(edge_it));
           let (k2, _) =
-            (yp + &(dt / 2. * &k1)).dydt(&stn_p, &d_stn, &d_gpe, &gpe_s, &s_ctx_ref, &stn.i_ext.row(edge_it + 1));
+            (yp + &(dt / 2. * &k1)).dydt(&stn_p, &d_stn, &d_gpe, &gpe_s, &ctx_s, &stn.i_ext.row(edge_it + 1));
           let (k3, _) =
-            (yp + &(dt / 2. * &k2)).dydt(&stn_p, &d_stn, &d_gpe, &gpe_s, &s_ctx_ref, &stn.i_ext.row(edge_it + 1));
-          let (k4, _) =
-            (yp + &(dt * &k3)).dydt(&stn_p, &d_stn, &d_gpe, &gpe_s, &s_ctx_ref, &stn.i_ext.row(edge_it + 2));
+            (yp + &(dt / 2. * &k2)).dydt(&stn_p, &d_stn, &d_gpe, &gpe_s, &ctx_s, &stn.i_ext.row(edge_it + 1));
+          let (k4, _) = (yp + &(dt * &k3)).dydt(&stn_p, &d_stn, &d_gpe, &gpe_s, &ctx_s, &stn.i_ext.row(edge_it + 2));
           let yn = yp + dt / 6. * (k1 + 2. * k2 + 2. * k3 + k4);
-          stn.insert(it + 1, &yn, i_gpe.view());
+          stn.insert(it + 1, &yn, is);
         }
         pb.finish_and_clear();
         dd_stn
@@ -163,14 +186,20 @@ impl Network {
       let str_thread = s.spawn(move |_| {
         for it in 0..num_timesteps - 1 {
           let edge_it = it * 2;
-          let s_ctx_ref = s_ctx_ref.row(it.saturating_add((10.5 / dt) as usize));
+          let ctx_id = if batch_idx != 1 {
+            it.wrapping_sub((10.5 / dt) as usize) as isize // NOTE This can panick for very small batch durations, it can loop around twice
+          } else {
+            it.saturating_sub((10.5 / dt) as usize) as isize
+          };
+
+          let ctx_s = ctx_s.row(wrap_idx(ctx_id, num_timesteps) * 2);
           let yp = &str.row(it);
           str_barrier.sym_sync_call(|| dd_str.update(&yp.v, dt, it));
 
-          let k1 = yp.dydt(&str_p, &s_ctx_ref, &str.i_ext.row(edge_it));
-          let k2 = (yp + &(dt / 2. * &k1)).dydt(&str_p, &s_ctx_ref, &str.i_ext.row(edge_it + 1));
-          let k3 = (yp + &(dt / 2. * &k2)).dydt(&str_p, &s_ctx_ref, &str.i_ext.row(edge_it + 1));
-          let k4 = (yp + &(dt * &k3)).dydt(&str_p, &s_ctx_ref, &str.i_ext.row(edge_it + 2));
+          let k1 = yp.dydt(&str_p, &ctx_s, &str.i_ext.row(edge_it));
+          let k2 = (yp + &(dt / 2. * &k1)).dydt(&str_p, &ctx_s, &str.i_ext.row(edge_it + 1));
+          let k3 = (yp + &(dt / 2. * &k2)).dydt(&str_p, &ctx_s, &str.i_ext.row(edge_it + 1));
+          let k4 = (yp + &(dt * &k3)).dydt(&str_p, &ctx_s, &str.i_ext.row(edge_it + 2));
           let yn = yp + dt / 6. * (k1 + 2. * k2 + 2. * k3 + k4);
           str.insert(it + 1, &yn);
         }
@@ -191,9 +220,9 @@ impl Network {
           let stn_s = stn_s.row(it);
           let str_s = str_s.row(it);
 
-          let k1 =
+          let (k1, is) =
             yp.dydt(&gpe_p, &d_gpe, &d_stn, &d_str, &stn_s, &str_s, &gpe.i_ext.row(edge_it), &gpe.i_app.row(edge_it));
-          let k2 = (yp + &(dt / 2. * &k1)).dydt(
+          let (k2, _) = (yp + &(dt / 2. * &k1)).dydt(
             &gpe_p,
             &d_gpe,
             &d_stn,
@@ -203,7 +232,7 @@ impl Network {
             &gpe.i_ext.row(edge_it + 1),
             &gpe.i_app.row(edge_it + 1),
           );
-          let k3 = (yp + &(dt / 2. * &k2)).dydt(
+          let (k3, _) = (yp + &(dt / 2. * &k2)).dydt(
             &gpe_p,
             &d_gpe,
             &d_stn,
@@ -213,7 +242,7 @@ impl Network {
             &gpe.i_ext.row(edge_it + 1),
             &gpe.i_app.row(edge_it + 1),
           );
-          let k4 = (yp + &(dt * &k3)).dydt(
+          let (k4, _) = (yp + &(dt * &k3)).dydt(
             &gpe_p,
             &d_gpe,
             &d_stn,
@@ -224,7 +253,7 @@ impl Network {
             &gpe.i_app.row(edge_it + 2),
           );
           let yn = yp + dt / 6. * &(k1 + 2. * k2 + 2. * k3 + k4);
-          gpe.insert(it + 1, &yn);
+          gpe.insert(it + 1, &yn, is);
         }
         dd_gpe
       });
@@ -295,22 +324,23 @@ impl Network {
 #[pymethods]
 impl Network {
   #[new]
-  #[pyo3(signature=(dt=0.01, total_t=2., experiment=None, experiment_version=None, 
+  #[pyo3(signature=(dt=0.01, total_time=2., experiment=None, experiment_version=None, 
                     parameters_file=None, boundry_ic_file=None, use_default=true,
                     save_dir=Some("/tmp/cbgt_last_model".to_owned()), batch_duration=4f64, **kwds))]
   fn new_py(
     dt: f64,
-    mut total_t: f64,
+    mut total_time: f64,
     experiment: Option<&str>,
     experiment_version: Option<&str>,
     parameters_file: Option<&str>,
     boundry_ic_file: Option<&str>,
     use_default: bool,
     save_dir: Option<String>, // Maybe add datetime to temp save
-    batch_duration: f64,      // Batch duration in s
+    mut batch_duration: f64,  // Batch duration in s
     kwds: Option<&Bound<'_, PyDict>>,
   ) -> Self {
-    total_t *= 1e3;
+    total_time *= 1e3;
+    batch_duration *= 1e3;
     assert!(experiment.is_some() || experiment_version.is_none(), "Experiment version requires experiment");
 
     let save_dir = save_dir.map(|x| x.trim_end_matches("/").to_owned());
@@ -384,13 +414,13 @@ impl Network {
     log::debug!("{:?}", pyf_src);
     let pyf_file = write_temp_pyf_file(pyf_src);
 
-    let num_timesteps: usize = (total_t / dt) as usize;
+    let num_timesteps: usize = (batch_duration / dt) as usize;
     println!("{num_timesteps}");
-    let str_bcs = str_bcs_builder.finish(str_count, ctx_count, dt, total_t, 2);
-    let stn_bcs = stn_bcs_builder.finish(stn_count, gpe_count, ctx_count, dt, total_t, 2);
-    let gpe_bcs = gpe_bcs_builder.finish(gpe_count, stn_count, str_count, dt, total_t, 2);
-    let gpi_bcs = gpi_bcs_builder.finish(gpi_count, stn_count, str_count, dt, total_t, 2);
-    let ctx_bcs = ctx_bcs_builder.finish(ctx_count, dt, total_t, 2);
+    let str_bcs = str_bcs_builder.finish(str_count, ctx_count);
+    let stn_bcs = stn_bcs_builder.finish(stn_count, gpe_count, ctx_count);
+    let gpe_bcs = gpe_bcs_builder.finish(gpe_count, stn_count, str_count);
+    let gpi_bcs = gpi_bcs_builder.finish(gpi_count, stn_count, str_count);
+    let ctx_bcs = ctx_bcs_builder.finish(ctx_count);
 
     if let Some(save_dir) = &save_dir {
       // @TODO save gpi and str as well
@@ -411,78 +441,55 @@ impl Network {
       std::fs::copy(&pyf_file, format!("{save_dir}/{PYF_FILE_NAME}.py")).unwrap();
     }
 
-    let str = STRHistory::new(num_timesteps, str_count, ctx_count, 2).with_bcs(str_bcs);
-    let stn = STNHistory::new(num_timesteps, stn_count, gpe_count, ctx_count, 2).with_bcs(stn_bcs);
-    let gpe = GPeHistory::new(num_timesteps, gpe_count, stn_count, str_count, 2).with_bcs(gpe_bcs);
-    let gpi = GPiHistory::new(num_timesteps, gpi_count, stn_count, str_count, 2).with_bcs(gpi_bcs);
-    let ctx = ctx_bcs.to_syn_ctx(&ctx_p, dt / 2.);
+    let str = STRHistory::new(num_timesteps, str_count, ctx_count, 2, str_bcs);
+    let stn = STNHistory::new(num_timesteps, stn_count, gpe_count, ctx_count, 2, stn_bcs);
+    let gpe = GPeHistory::new(num_timesteps, gpe_count, stn_count, str_count, 2, gpe_bcs);
+    let gpi = GPiHistory::new(num_timesteps, gpi_count, stn_count, str_count, 2, gpi_bcs);
+    // let ctx = ctx_bcs.to_syn_ctx(&ctx_p, dt / 2.);
+    let ctx = CTXHistory::new(num_timesteps, ctx_count, 2, ctx_bcs);
 
     std::fs::remove_file(pyf_file).expect("File was just created, it should exist.");
 
-    Self { dt, total_t, stn, stn_p, gpe, gpe_p, gpi, gpi_p, str, str_p, ctx, batch_duration }
+    Self { dt, total_time, stn, stn_p, gpe, gpe_p, gpi, gpi_p, str, str_p, ctx, ctx_p, batch_duration }
   }
 
-  #[pyo3(name = "run_rk4")]
-  fn run_rk4_py<'py>(&mut self, py: Python) -> PyResult<(PyObject, PyObject, PyObject, PyObject)> {
-    let (d_stn, d_gpe, d_gpi, d_str) = self.run_rk4_batch();
-    Ok((
-      d_stn.into_pyarray(py).into_any().unbind(),
-      d_gpe.into_pyarray(py).into_any().unbind(),
-      d_gpi.into_pyarray(py).into_any().unbind(),
-      d_str.into_pyarray(py).into_any().unbind(),
-    ))
-  }
-
-  #[pyo3(name="to_polars", signature = (dt=None, data=vec![]))]
-  fn into_map_polars_dataframe_py(&self, py: Python, dt: Option<f64>, data: Vec<String>) -> Py<PyDict> {
+  #[pyo3(name = "run_rk4", signature = (data=vec![], odt=None, save_dir=Some("test_out/".into())))]
+  fn run_rk4_py<'py>(
+    &mut self,
+    py: Python,
+    data: Vec<String>,
+    odt: Option<f64>,
+    save_dir: Option<String>,
+  ) -> Py<PyDict> {
     let data = data.iter().map(String::as_str).collect();
-    // TODO this data argument could really just be a u32 flag
-    let stn = self.stn.into_compressed_polars_df(self.dt, dt, 2, &data);
-    let gpe = self.gpe.into_compressed_polars_df(self.dt, dt, 2, &data);
-    let gpi = self.gpi.into_compressed_polars_df(self.dt, dt, 2, &data);
-    let str = self.str.into_compressed_polars_df(self.dt, dt, 2, &data);
-    let ctx = ctx_syn_into_compressed_polars_df(&self.ctx, self.dt, dt, 2, &data);
+    let RunOutput { mut stn, mut str, mut gpe, mut gpi, mut ctx } = self.run_rk4(&data, odt);
+
+    if let Some(save_dir) = save_dir {
+      let save_dir = PathBuf::from(save_dir);
+
+      let write_parquet = |name: &str, df: &mut polars::prelude::DataFrame| {
+        let file_path = save_dir.join(name);
+        let file = std::fs::File::create(&file_path).expect("Could not creare output file");
+        let writer = polars::prelude::ParquetWriter::new(&file);
+        writer.set_parallel(true).finish(df).expect("Could not write to output file");
+        file_path
+      };
+
+      write_parquet("str.parquet", &mut str);
+      write_parquet("stn.parquet", &mut stn);
+      write_parquet("gpe.parquet", &mut gpe);
+      write_parquet("gpi.parquet", &mut gpi);
+      write_parquet("ctx.parquet", &mut ctx);
+    }
 
     let dict = PyDict::new(py);
     dict.set_item("stn", pyo3_polars::PyDataFrame(stn)).expect("Could not add insert STN Polars DataFrame");
+    dict.set_item("str", pyo3_polars::PyDataFrame(str)).expect("Could not add insert STR Polars DataFrame");
     dict.set_item("gpe", pyo3_polars::PyDataFrame(gpe)).expect("Could not add insert GPe Polars DataFrame");
     dict.set_item("gpi", pyo3_polars::PyDataFrame(gpi)).expect("Could not add insert GPi Polars DataFrame");
-    dict.set_item("str", pyo3_polars::PyDataFrame(str)).expect("Could not add insert STR Polars DataFrame");
     dict.set_item("ctx", pyo3_polars::PyDataFrame(ctx)).expect("Could not add insert CTX Polars DataFrame");
 
     dict.into()
-  }
-
-  #[pyo3(signature = (dir, dt=None, data=vec![]))]
-  fn save_to_parquet_files(&self, dir: &str, dt: Option<f64>, data: Vec<String>) -> PyResult<()> {
-    let data = data.iter().map(String::as_str).collect();
-    let dir = std::path::PathBuf::from_str(dir)?;
-    std::fs::create_dir_all(&dir)?;
-
-    let write_parquet = |name: &str, df: &mut polars::prelude::DataFrame| {
-      let file_path = dir.join(name);
-      let file = std::fs::File::create(&file_path).expect("Could not creare output file");
-      let writer = polars::prelude::ParquetWriter::new(&file);
-      writer.set_parallel(true).finish(df).expect("Could not write to output file");
-      file_path
-    };
-
-    let mut str = self.str.into_compressed_polars_df(self.dt, dt, 2, &data);
-    write_parquet("str.parquet", &mut str);
-    drop(str);
-    let mut stn = self.stn.into_compressed_polars_df(self.dt, dt, 2, &data);
-    write_parquet("stn.parquet", &mut stn);
-    drop(stn);
-    let mut gpe = self.gpe.into_compressed_polars_df(self.dt, dt, 2, &data);
-    write_parquet("gpe.parquet", &mut gpe);
-    drop(gpe);
-    let mut gpi = self.gpi.into_compressed_polars_df(self.dt, dt, 2, &data);
-    write_parquet("gpi.parquet", &mut gpi);
-    drop(gpi);
-    let mut ctx = ctx_syn_into_compressed_polars_df(&self.ctx, self.dt, dt, 2, &data);
-    write_parquet("ctx.parquet", &mut ctx);
-    drop(ctx);
-    Ok(())
   }
 
   #[staticmethod]

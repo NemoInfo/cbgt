@@ -9,6 +9,7 @@ import argparse
 import time
 import subprocess
 import sys
+import polars as pl
 
 np.random.seed(69)
 target_color = "#5e3c99"
@@ -92,12 +93,6 @@ def gpe_i_app(t, n):
 
 
 def test(experiment="wave", total_t=2, metrics=None, **opt):
-  num_str = 10     # 50
-  num_stn = 10     # 10
-  num_gpe = 10     # 30
-  num_gpi = 10     # 10
-  num_ctx = 10     # 50
-
   num_str = 50
   num_stn = 10
   num_gpe = 30
@@ -107,13 +102,13 @@ def test(experiment="wave", total_t=2, metrics=None, **opt):
   if metrics is None: metrics = []
   rt = cbgt.Network(
       dt=0.05,
-      total_t=total_t,
+      total_time=total_t,
       experiment=experiment,
       gpe_i_app=gpe_i_app,
       gpe_i_ext=zeros,
       gpi_i_ext=zeros,
       str_i_ext=zeros,
-      stn_i_ext=stn_i_ext,
+      stn_i_ext=zeros,
       ctx_stimuli=ctx_stimuli,
       stn_w_gpe=nearest_no_loop(num_gpe, num_stn, 1),
       stn_w_ctx=nearest_no_loop(num_ctx, num_stn, 3),
@@ -136,10 +131,7 @@ def test(experiment="wave", total_t=2, metrics=None, **opt):
       **rand_gpi(num_gpi),
       **opt)
   start = time.time()
-  rt.run_rk4()
-  print(f"\n> Simulated {total_t:.2f}s in {time.time() - start:.2f}s 🚀\n")
-  df = rt.to_polars(data=metrics + ["time"])
-  rt.save_to_parquet_files("test_out/")
+  df = rt.run_rk4(metrics + ["time"])
 
   for y in metrics:
     if y == "i_ext":
@@ -152,8 +144,7 @@ def test(experiment="wave", total_t=2, metrics=None, **opt):
     else:
       plot_time_activity([df for df in df.values()], [*df.keys()], y=y, cmap=cmap, vmax=None, vmin=None)
       plt.show(block=False)
-      plot_time_trace([df for df in df.values()], [*df.keys()], y=y, color="w")
-      #plt.show(block=False)
+      #plot_time_trace([df for df in df.values()], [*df.keys()], y=y, color="w")
 
   plt.show()
 

@@ -1,9 +1,9 @@
 use std::fmt::Debug;
 use std::ops::{Add, Mul};
 
-use log::debug;
 use ndarray::{s, Array1, Array2, ArrayView1, Ix2, OwnedRepr, ViewRepr};
 use ndarray::{ArrayBase, Ix1};
+use pyo3::{PyAny, Python};
 use struct_field_names_as_array::FieldNamesAsSlice;
 
 use crate::parameters::GPiParameters;
@@ -20,7 +20,7 @@ impl Neuron for GPi {
 
 pub type GPiConfig = NeuronConfig<GPi, GPiParameters, GPiPopulationBoundryConditions>;
 
-#[derive(FieldNamesAsSlice, Debug, Default)]
+#[derive(FieldNamesAsSlice)]
 pub struct GPiPopulationBoundryConditions {
   pub count: usize,
   // State
@@ -30,8 +30,8 @@ pub struct GPiPopulationBoundryConditions {
   pub r: Array1<f64>,
   pub ca: Array1<f64>,
   pub s: Array1<f64>,
-  pub i_ext: Array2<f64>,
-  pub i_app: Array2<f64>,
+  pub i_ext: pyo3::Py<PyAny>,
+  pub i_app: pyo3::Py<PyAny>,
 
   // Connection Matrice
   pub w_g_g: Array2<f64>,
@@ -49,15 +49,7 @@ impl Build<GPi, Boundary> for GPiPopulationBoundryConditions {
 pub type BuilderGPiBoundary = Builder<GPi, Boundary, GPiPopulationBoundryConditions>;
 
 impl BuilderGPiBoundary {
-  pub fn finish(
-    self,
-    gpi_count: usize,
-    stn_count: usize,
-    str_count: usize,
-    dt: f64,
-    total_t: f64,
-    edge_resolution: u8,
-  ) -> GPiPopulationBoundryConditions {
+  pub fn finish(self, gpi_count: usize, stn_count: usize, str_count: usize) -> GPiPopulationBoundryConditions {
     let pbc = Array1::zeros(gpi_count);
 
     let v =
@@ -79,16 +71,8 @@ impl BuilderGPiBoundary {
       self.map.get("s").map(try_toml_value_to_1darray::<f64>).map_or(pbc.clone(), |x| x.expect("invalid bc dim s"));
     assert_eq!(s.len(), gpi_count);
 
-    let i_ext_f =
-      toml_py_function_qualname_to_py_object(self.map.get("i_ext").expect("default should be set by caller"));
-    let i_ext = vectorize_i_ext_py(&i_ext_f, dt / (edge_resolution as f64), total_t, gpi_count);
-
-    let i_app_f =
-      toml_py_function_qualname_to_py_object(self.map.get("i_app").expect("default should be set by caller"));
-    let i_app = vectorize_i_ext_py(&i_app_f, dt / (edge_resolution as f64), total_t, gpi_count);
-
-    debug!("GPi I_ext vectorized to\n{i_ext}");
-    debug!("GPi I_app vectorized to\n{i_app}");
+    let i_ext = toml_py_function_qualname_to_py_object(self.map.get("i_ext").expect("default should be set by caller"));
+    let i_app = toml_py_function_qualname_to_py_object(self.map.get("i_app").expect("default should be set by caller"));
 
     let w_g_g = self
       .map
@@ -373,7 +357,6 @@ where
   }
 }
 
-#[derive(Default, Clone)]
 pub struct GPiHistory {
   pub v: Array2<f64>,
   pub n: Array2<f64>,
@@ -389,6 +372,8 @@ pub struct GPiHistory {
   pub ca_str: Array2<f64>,
   pub i_ext: Array2<f64>,
   pub i_app: Array2<f64>,
+  pub i_ext_f: pyo3::Py<PyAny>,
+  pub i_app_f: pyo3::Py<PyAny>,
 }
 
 impl GPiHistory {
@@ -398,8 +383,9 @@ impl GPiHistory {
     stn_count: usize,
     str_count: usize,
     edge_resolution: usize,
+    bc: GPiPopulationBoundryConditions,
   ) -> Self {
-    Self {
+    let mut res = Self {
       v: Array2::zeros((num_timesteps, gpi_count)),
       n: Array2::zeros((num_timesteps, gpi_count)),
       h: Array2::zeros((num_timesteps, gpi_count)),
@@ -408,28 +394,40 @@ impl GPiHistory {
       s: Array2::zeros((num_timesteps, gpi_count)),
       i_ext: Array2::zeros((num_timesteps * edge_resolution, gpi_count)),
       i_app: Array2::zeros((num_timesteps * edge_resolution, gpi_count)),
+      i_ext_f: bc.i_ext,
+      i_app_f: bc.i_app,
       w_s_g: Array2::zeros((stn_count, gpi_count)),
       w_g_g: Array2::zeros((gpi_count, gpi_count)),
       w_str: Array2::zeros((str_count, gpi_count)),
       ca_s_g: Array2::zeros((stn_count, gpi_count)),
       ca_g_g: Array2::zeros((gpi_count, gpi_count)),
       ca_str: Array2::zeros((str_count, gpi_count)),
-    }
+    };
+    res.v.row_mut(0).assign(&bc.v);
+    res.n.row_mut(0).assign(&bc.n);
+    res.h.row_mut(0).assign(&bc.h);
+    res.r.row_mut(0).assign(&bc.r);
+    res.ca.row_mut(0).assign(&bc.ca);
+    res.s.row_mut(0).assign(&bc.s);
+    res.w_g_g.assign(&bc.w_g_g);
+    res.w_s_g.assign(&bc.w_s_g);
+    res.w_str.assign(&bc.w_str);
+    res
   }
 
-  pub fn with_bcs(mut self, bc: GPiPopulationBoundryConditions) -> Self {
-    self.v.row_mut(0).assign(&bc.v);
-    self.n.row_mut(0).assign(&bc.n);
-    self.h.row_mut(0).assign(&bc.h);
-    self.r.row_mut(0).assign(&bc.r);
-    self.ca.row_mut(0).assign(&bc.ca);
-    self.s.row_mut(0).assign(&bc.s);
-    self.w_g_g.assign(&bc.w_g_g);
-    self.w_s_g.assign(&bc.w_s_g);
-    self.w_str.assign(&bc.w_str);
-    self.i_ext.assign(&bc.i_ext);
-    self.i_app.assign(&bc.i_app);
-    self
+  pub fn fill_i_ext(&mut self, py: Python, start_time: f64, end_time: f64, dt: f64) {
+    let neurons = self.i_ext.shape()[1];
+    self.i_ext = vectorize_i_ext_py(py, &self.i_ext_f, start_time, end_time, dt, neurons);
+    self.i_app = vectorize_i_ext_py(py, &self.i_app_f, start_time, end_time, dt, neurons);
+  }
+
+  pub fn roll(&mut self) {
+    roll_time_series(self.v.view_mut());
+    roll_time_series(self.n.view_mut());
+    roll_time_series(self.h.view_mut());
+    roll_time_series(self.r.view_mut());
+    roll_time_series(self.ca.view_mut());
+    roll_time_series(self.s.view_mut());
   }
 
   pub fn insert(&mut self, it: usize, y: &GPiState<OwnedRepr<f64>>) {
@@ -469,6 +467,7 @@ impl GPiHistory {
     odt: Option<f64>,
     edge_resolution: usize,
     data: &Vec<&str>,
+    start_time: f64
   ) -> polars::prelude::DataFrame {
     let num_timesteps = self.v.nrows();
     let odt = odt.unwrap_or(1.); // ms
@@ -487,10 +486,8 @@ impl GPiHistory {
 
     let num_timesteps = self.v.slice(srange).nrows();
 
-    let time = (ndarray::Array1::range(0., num_timesteps as f64, 1.) * output_dt)
-      .to_shape((num_timesteps, 1))
-      .unwrap()
-      .to_owned();
+    let time = start_time + 
+      (ndarray::Array1::range(0., num_timesteps as f64, 1.) * output_dt).to_shape((num_timesteps, 1)).unwrap().to_owned();
 
     let mut out = vec![];
     if data.contains(&"time"){out.push(array2_to_polars_column("time", time.view()))}

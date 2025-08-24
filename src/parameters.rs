@@ -27,9 +27,6 @@ pub struct STRParameters {
   pub g_l: f64,   // nS/um^2
   pub g_k: f64,   // nS/um^2
   pub g_na: f64,  // nS/um^2
-  pub g_t: f64,   // nS/um^2
-  pub g_ca: f64,  // nS/um^2
-  pub g_ahp: f64, // nS/um^2
   pub g_str: f64, // nS/um^2
   pub g_ctx: f64, // nS/um^2
 
@@ -37,7 +34,6 @@ pub struct STRParameters {
   pub v_l: f64,  // mV
   pub v_k: f64,  // mV
   pub v_na: f64, // mV
-  pub v_ca: f64, // mV
   pub v_str: f64,
   pub v_ctx: f64,
 
@@ -53,19 +49,11 @@ pub struct STRParameters {
   pub phi_n: f64,
   pub phi_r: f64, // 0.2 // [MISMATCH]
 
-  // Calcium parameters
-  pub k_1: f64,
-  pub k_ca: f64,
-  pub eps: f64, // ms^-1 x (== phi_h * 5e-5)
-
   // Threshold potentials
   pub tht_m: f64, // mV x
   pub tht_h: f64, // mV x
   pub tht_n: f64, // mV x
   pub tht_r: f64, // mV
-  pub tht_a: f64, // mV
-  pub tht_b: f64, // 0.4 [MISMATCH]
-  pub tht_s: f64, // mV x
 
   // Tau threshold potentials
   pub tht_h_t: f64, // mV
@@ -85,9 +73,6 @@ pub struct STRParameters {
   pub sig_h: f64,
   pub sig_n: f64,
   pub sig_r: f64,
-  pub sig_a: f64,
-  pub sig_b: f64, // -0.1 [MISMATCH]
-  pub sig_s: f64,
 
   // Tau sigmoid slopes
   pub sig_h_t: f64,
