@@ -6,10 +6,10 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 from matplotlib.colors import LinearSegmentedColormap, ListedColormap
 import argparse
-import time
 import subprocess
+from tqdm import tqdm
+from pathlib import Path
 import sys
-import polars as pl
 
 np.random.seed(69)
 target_color = "#5e3c99"
@@ -29,7 +29,7 @@ def random(rows, cols, n):
   return res
 
 
-def nearest_no_loop(rows, cols, n):
+def n_network(rows, cols, n):
   assert n % 2 == 1, "n must be odd for symmetric nearest neighbors"
   res = np.zeros((rows, cols), dtype=np.float64)
 
@@ -41,6 +41,24 @@ def nearest_no_loop(rows, cols, n):
     start = max(0, center - half)
     end = min(cols, center + half + 1)
     res[i, start:end] = 1.0
+
+  return res
+
+
+def s_network(rows, cols, n):
+  assert n % 2 == 1, "n must be odd for symmetric nearest neighbors"
+  res = np.zeros((rows, cols), dtype=np.float64)
+
+  ids = np.linspace(0, cols - 1, rows)
+  ids = np.rint(ids).astype(int)
+
+  half = n // 2
+  for i, center in enumerate(ids):
+    start = max(0, center - half - 1)
+    end = min(cols, center + half + 2)
+    res[i, start:end] = 1.
+    if center + 1 < res.shape[1]: res[i, center + 1] = 0.
+    if center - 1 >= 0: res[i, center - 1] = 0.
 
   return res
 
@@ -77,7 +95,7 @@ def zeros(time_ms, t):
 
 
 def ctx_stimuli(t, n):
-  if (1000 < t < 1100 and n == 49):
+  if (2500 < t < 2502 and n == 24):
     return 1.0
   return 0.0
 
@@ -100,53 +118,54 @@ def test(experiment="wave", total_t=2, metrics=None, **opt):
   num_ctx = 50
 
   if metrics is None: metrics = []
-  rt = cbgt.Network(
-      dt=0.05,
-      total_time=total_t,
-      experiment=experiment,
-      gpe_i_app=gpe_i_app,
-      gpe_i_ext=zeros,
-      gpi_i_ext=zeros,
-      str_i_ext=zeros,
-      stn_i_ext=zeros,
-      ctx_stimuli=ctx_stimuli,
-      stn_w_gpe=nearest_no_loop(num_gpe, num_stn, 1),
-      stn_w_ctx=nearest_no_loop(num_ctx, num_stn, 3),
-      str_w_str=nearest_no_loop(num_str, num_str, 9),
-      str_w_ctx=nearest_no_loop(num_str, num_str, 1),
-      gpe_w_g_g=nearest_no_loop(num_gpe, num_gpe, 15) - np.eye(num_gpe),
-      gpe_w_s_g=nearest_no_loop(num_stn, num_gpe, 3),
-      gpe_w_str=nearest_no_loop(num_str, num_gpe, 9),
-                                                                         # gpi_w_g_g=random(num_gpi, num_gpi, 2),
-      gpi_w_s_g=nearest_no_loop(num_stn, num_gpi, 3),
-      gpi_w_str=nearest_no_loop(num_str, num_gpi, 9),
-      str_count=num_str,
-      stn_count=num_stn,
-      gpe_count=num_gpe,
-      gpi_count=num_gpi,
-      ctx_count=num_ctx,
-      **rand_str(num_str),
-      **rand_stn(num_stn),
-      **rand_gpe(num_gpe),
-      **rand_gpi(num_gpi),
-      **opt)
-  start = time.time()
-  df = rt.run_rk4(metrics + ["time"])
 
-  for y in metrics:
-    if y == "i_ext":
-      plot_time_activity([df for df in df.values()], [*df.keys()], y=y, cmap=f"YlGnBu_r")
-      plt.show(block=False)
-    elif y == "v":
-      plot_time_activity([df for df in df.values()], [*df.keys()], y="v", unit="mV", vmin=-80, vmax=0, cmap=cmap)
-      # plot_time_trace([df for df in df.values()], [*df.keys()], y="v", color="w")
-      plt.show(block=False)
-    else:
-      plot_time_activity([df for df in df.values()], [*df.keys()], y=y, cmap=cmap, vmax=None, vmin=None)
-      plt.show(block=False)
-      #plot_time_trace([df for df in df.values()], [*df.keys()], y=y, color="w")
+  for i in tqdm(range(100)):
+    rt = cbgt.Network(dt=0.05,
+                      total_time=total_t,
+                      experiment=experiment,
+                      gpe_i_app=zeros,
+                      gpe_i_ext=zeros,
+                      gpi_i_ext=zeros,
+                      str_i_ext=zeros,
+                      stn_i_ext=zeros,
+                      ctx_stimuli=ctx_stimuli,
+                      stn_w_gpe=s_network(num_gpe, num_stn, 1),
+                      stn_w_ctx=s_network(num_ctx, num_stn, 3),
+                      str_w_str=s_network(num_str, num_str, 9) - np.eye(num_str),
+                      str_w_ctx=s_network(num_str, num_str, 1),
+                      gpe_w_g_g=s_network(num_gpe, num_gpe, 15) - np.eye(num_gpe),
+                      gpe_w_s_g=s_network(num_stn, num_gpe, 3),
+                      gpe_w_str=s_network(num_str, num_gpe, 9),
+                      gpi_w_s_g=s_network(num_stn, num_gpi, 3),
+                      gpi_w_str=s_network(num_str, num_gpi, 9),
+                      gpi_w_g_g=s_network(num_gpi, num_gpi, 5) - np.eye(num_gpi),
+                      str_count=num_str,
+                      stn_count=num_stn,
+                      gpe_count=num_gpe,
+                      gpi_count=num_gpi,
+                      ctx_count=num_ctx,
+                      **rand_str(num_str),
+                      **rand_stn(num_stn),
+                      **rand_gpe(num_gpe),
+                      **rand_gpi(num_gpi),
+                      **opt)
+    Path(f"experiment_rate/trial{i}").mkdir(parents=True, exist_ok=True)
+    rt.run_rk4(metrics + ["time"], odt=0.05, save_dir=f"experiment_rate/trial{i}")
 
-  plt.show()
+  # for y in metrics:
+  #   if y == "i_ext":
+  #     plot_time_activity([df for df in df.values()], [*df.keys()], y=y, cmap=f"YlGnBu_r")
+  #     plt.show(block=False)
+  #   elif y == "v":
+  #     plot_time_activity([df for df in df.values()], [*df.keys()], y="v", unit="mV", vmin=-80, vmax=0, cmap=cmap)
+  #     # plot_time_trace([df for df in df.values()], [*df.keys()], y="v", color="w")
+  #     plt.show(block=False)
+  #   else:
+  #     plot_time_activity([df for df in df.values()], [*df.keys()], y=y, cmap=cmap, vmax=None, vmin=None)
+  #     plt.show(block=False)
+  #     #plot_time_trace([df for df in df.values()], [*df.keys()], y=y, color="w")
+
+  # plt.show()
 
 
 def main(args):

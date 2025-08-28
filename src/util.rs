@@ -211,7 +211,6 @@ where
 }
 
 pub fn get_py_function_source(f: &PyObject) -> Option<String> {
-  pyo3::prepare_freethreaded_python();
   Python::with_gil(|py| {
     Some({
       let source = PyModule::import(py, "inspect").ok()?.getattr("getsource").ok()?.call1((f,)).ok()?;
@@ -361,9 +360,21 @@ pub fn write_temp_pyf_file(pyf_src: HashMap<String, String>) -> String {
   file_path
 }
 
-pub fn write_parameter_file(stn: &STNParameters, gpe: &GPeParameters, dir: &str) {
-  let parameter_map =
-    toml::value::Table::from_iter([("STN".to_owned(), stn.to_toml()), ("GPe".to_owned(), gpe.to_toml())]);
+pub fn write_parameter_file(
+  stn: &STNParameters,
+  gpe: &GPeParameters,
+  gpi: &GPiParameters,
+  str: &STRParameters,
+  ctx: &CTXParameters,
+  dir: &str,
+) {
+  let parameter_map = toml::value::Table::from_iter([
+    ("STN".to_owned(), stn.to_toml()),
+    ("GPe".to_owned(), gpe.to_toml()),
+    ("GPi".to_owned(), gpi.to_toml()),
+    ("STR".to_owned(), str.to_toml()),
+    ("CTX".to_owned(), ctx.to_toml()),
+  ]);
 
   let file_path: std::path::PathBuf = format!("{dir}/{}", Parameters::EXP_FILE).into();
   let mut file = std::fs::File::create(&file_path).unwrap();

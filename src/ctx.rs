@@ -76,8 +76,8 @@ impl CTXHistory {
     let output_dt = step as f64 * idt;
     let erange = ndarray::s![0..num_timesteps * edge_resolution;step * edge_resolution, ..];
     let num_timesteps = (0..num_timesteps).step_by(step).len();
-    let time = start_time +
-      (Array1::range(0., num_timesteps as f64, 1.) * output_dt).to_shape((num_timesteps, 1)).unwrap().to_owned();
+    let time = start_time
+      + (Array1::range(0., num_timesteps as f64, 1.) * output_dt).to_shape((num_timesteps, 1)).unwrap().to_owned();
 
     let mut out = vec![];
     if data.contains(&"time") {
@@ -147,7 +147,8 @@ fn stimuli_to_firing_rates(
 }
 
 fn firing_rates_to_cortical_spikes(firing_rates: &Array2<f64>, dt: f64) -> Array2<f64> {
-  let mut rng = rand_isaac::isaac64::Isaac64Rng::seed_from_u64(420);
+  let time = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+  let mut rng = rand_isaac::isaac64::Isaac64Rng::seed_from_u64(time);
   let uniform = Array2::<f64>::random_using(firing_rates.raw_dim(), Open01, &mut rng);
   let spikes = ndarray::Zip::from(firing_rates).and(&uniform).map_collect(|&r, &u| (u < r * dt) as i8 as f64);
   enforce_min_inter_spike_interval(&spikes, dt)

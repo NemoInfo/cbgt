@@ -167,7 +167,6 @@ impl STRHistory {
   pub fn insert(&mut self, it: usize, y: &STRState<OwnedRepr<f64>>) {
     self.v.row_mut(it).assign(&y.v);
     self.n.row_mut(it).assign(&y.n);
-    self.r.row_mut(it).assign(&y.r);
     self.h.row_mut(it).assign(&y.h);
     self.s.row_mut(it).assign(&y.s);
   }
@@ -185,7 +184,6 @@ impl STRHistory {
       v: self.v.row(it),
       n: self.n.row(it),
       h: self.h.row(it),
-      r: self.r.row(it),
       s: self.s.row(it),
       w_str: self.w_str.view(),
       ca_syn_str: self.ca_syn_str.view(),
@@ -204,7 +202,6 @@ where
       v: self * &rhs.v,
       n: self * &rhs.n,
       h: self * &rhs.h,
-      r: self * &rhs.r,
       s: self * &rhs.s,
       w_str: self * &rhs.w_str,
       ca_syn_str: self * &rhs.ca_syn_str,
@@ -250,7 +247,6 @@ where
   pub v: ArrayBase<T, Ix1>,
   pub n: ArrayBase<T, Ix1>,
   pub h: ArrayBase<T, Ix1>,
-  pub r: ArrayBase<T, Ix1>,
   pub s: ArrayBase<T, Ix1>,
   pub w_str: ArrayBase<T, Ix2>,
   pub ca_syn_str: ArrayBase<T, Ix2>,
@@ -262,7 +258,7 @@ where
   T: ndarray::Data<Elem = f64>,
 {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    f.debug_struct("STRState").field("v", &self.v).field("n", &self.n).field("r", &self.r).field("s", &self.s).finish()
+    f.debug_struct("STRState").field("v", &self.v).field("n", &self.n).field("s", &self.s).finish()
   }
 }
 
@@ -276,17 +272,15 @@ where
     s_ctx: &ArrayView1<f64>,
     i_ext: &ArrayView1<f64>,
   ) -> STRState<OwnedRepr<T::Elem>> {
-    let Self { v, n, h, r, s, w_str, ca_syn_str, w_ctx } = self;
+    let Self { v, n, h, s, w_str, ca_syn_str, w_ctx } = self;
 
     let n_oo = x_oo(v, p.tht_n, p.sig_n);
     let m_oo = x_oo(v, p.tht_m, p.sig_m);
     let h_oo = x_oo(v, p.tht_h, p.sig_h);
-    let r_oo = x_oo(v, p.tht_r, p.sig_r);
     let h_syn_oo = x_oo(&(v - p.tht_g), p.tht_g_h, p.sig_g_h);
 
     let tau_n = tau_x(v, p.tau_n_0, p.tau_n_1, p.tht_n_t, p.sig_n_t);
     let tau_h = tau_x(v, p.tau_h_0, p.tau_h_1, p.tht_h_t, p.sig_h_t);
-    let tau_r = tau_x(v, p.tau_r_0, p.tau_r_1, p.tht_r_t, p.sig_r_t);
 
     let i_l = p.g_l * (v - p.v_l);
     let i_k = p.g_k * n.powi(4) * (v - p.v_k);
@@ -300,7 +294,6 @@ where
       v: -i_l - i_k - i_na - i_str - i_ctx - i_ext,
       n: p.phi_n * (n_oo - n) / tau_n,
       h: p.phi_h * (h_oo - h) / tau_h,
-      r: p.phi_r * (r_oo - r) / tau_r,
       s: p.alpha * h_syn_oo * (1. - s) - p.beta * s,
       w_str: Array2::<f64>::zeros(w_str.raw_dim()),
       ca_syn_str: Array2::<f64>::zeros(ca_syn_str.raw_dim()),
@@ -320,7 +313,6 @@ where
       v: &self.v + &rhs.v,
       n: &self.n + &rhs.n,
       h: &self.h + &rhs.h,
-      r: &self.r + &rhs.r,
       s: &self.s + &rhs.s,
       w_str: &self.w_str + &rhs.w_str,
       ca_syn_str: &self.ca_syn_str + &rhs.ca_syn_str,

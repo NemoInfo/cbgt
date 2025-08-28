@@ -117,6 +117,7 @@ impl Network {
       ctx.fill_s(py, ctx_p, start_time, end_time, dt / 2.);
     });
 
+    // TODO this should probably be rolled into the each neuron's state
     let mut dd_stn = DiracDeltaState::new(stn.v.raw_dim());
     let d_stn_ref = unsafe { ndarray::ArrayView2::from_shape_ptr(dd_stn.d.raw_dim(), dd_stn.d.as_ptr()) };
     let mut dd_gpe = DiracDeltaState::new(gpe.v.raw_dim());
@@ -415,7 +416,6 @@ impl Network {
     let pyf_file = write_temp_pyf_file(pyf_src);
 
     let num_timesteps: usize = (batch_duration / dt) as usize;
-    println!("{num_timesteps}");
     let str_bcs = str_bcs_builder.finish(str_count, ctx_count);
     let stn_bcs = stn_bcs_builder.finish(stn_count, gpe_count, ctx_count);
     let gpe_bcs = gpe_bcs_builder.finish(gpe_count, stn_count, str_count);
@@ -423,8 +423,7 @@ impl Network {
     let ctx_bcs = ctx_bcs_builder.finish(ctx_count);
 
     if let Some(save_dir) = &save_dir {
-      // @TODO save gpi and str as well
-      write_parameter_file(&stn_p, &gpe_p, save_dir); // TODO add other nuclei
+      write_parameter_file(&stn_p, &gpe_p, &gpi_p, &str_p, &ctx_p, save_dir);
       write_boundary_file(
         &stn_bcs,
         &gpe_bcs,

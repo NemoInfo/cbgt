@@ -245,8 +245,8 @@ where
         let kv = parse_toml_value(key, &format!("{value:?}")).as_table().unwrap().clone();
         self.par_map.extend(kv);
         return true;
-      } else if BoundaryBuilder::FIELD_NAMES_AS_SLICE.contains(&key) {
-        let kv = self.parse_toml_callable_py(key, value);
+      } else if BoundaryBuilder::FIELD_NAMES_AS_SLICE.contains(&key) { 
+        let kv = self.parse_toml_callable_py(key, value); // TODO have a none option
         self.bcs_map.extend(kv);
         return true;
       }
